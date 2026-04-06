@@ -33,7 +33,7 @@ export function SettingsScreen() {
     google: '',
   });
   const [showKeys, setShowKeys] = useState(false);
-  const [byok, setByok] = useState(true);
+  const [byok, setByok] = useState(false);
 
   React.useEffect(() => {
     loadKeys();

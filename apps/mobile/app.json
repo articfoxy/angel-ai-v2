@@ -12,7 +12,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.angelai.app",
-      "buildNumber": "7",
+      "buildNumber": "8",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Angel AI needs microphone access to provide real-time conversation intelligence.",
         "UIBackgroundModes": [
