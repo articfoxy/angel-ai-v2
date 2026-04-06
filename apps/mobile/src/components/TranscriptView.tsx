@@ -1,25 +1,23 @@
 import React, { useRef, useEffect, useMemo } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import { Ionicons } from '@expo/vector-icons';
 import type { TranscriptSegment } from '../types';
-import { colors, spacing, fontSize } from '../theme';
+import { colors, spacing, fontSize, radius } from '../theme';
 
 const SPEAKER_COLORS: Record<string, string> = {
-  Owner: '#6366f1',
-  'Person A': '#22c55e',
-  'Person B': '#f59e0b',
-  'Person C': '#ef4444',
-  'Person D': '#06b6d4',
-  'Person E': '#ec4899',
+  Owner: '#7c7fff',
+  'Person A': '#34d399',
+  'Person B': '#fbbf24',
+  'Person C': '#f87171',
+  'Person D': '#38bdf8',
+  'Person E': '#f472b6',
 };
 
 interface SpeakerGroup {
   speaker: string;
-  /** Concatenated final text for this speaker turn */
   finalText: string;
-  /** Interim (not yet finalized) text appended live */
   interimText: string;
-  /** Unique key for React rendering */
   key: string;
 }
 
@@ -28,13 +26,6 @@ interface TranscriptViewProps {
   speakerNames: Record<string, string>;
 }
 
-/**
- * Groups consecutive transcript segments by speaker and merges their text
- * into coherent paragraphs. When the same speaker has multiple consecutive
- * segments, they are joined into a single block instead of showing each
- * fragment separately. Interim (live) text is shown at the end of the
- * current speaker's turn.
- */
 function groupSegmentsBySpeaker(
   segments: TranscriptSegment[],
   speakerNames: Record<string, string>
@@ -44,40 +35,32 @@ function groupSegmentsBySpeaker(
   for (const segment of segments) {
     const speakerKey = segment.speaker || 'unknown';
     const label = speakerNames[speakerKey] || speakerKey;
-
     const lastGroup = groups[groups.length - 1];
 
     if (lastGroup && lastGroup.speaker === label) {
-      // Same speaker — merge into existing group
       if (segment.isFinal) {
-        // Append finalized text with proper spacing
         const trimmed = segment.text.trim();
         if (trimmed) {
           lastGroup.finalText = lastGroup.finalText
             ? `${lastGroup.finalText} ${trimmed}`
             : trimmed;
         }
-        // Clear interim since we got a final version
         lastGroup.interimText = '';
       } else {
-        // Update interim text (replaces previous interim for this group)
         lastGroup.interimText = segment.text.trim();
       }
     } else {
-      // Different speaker — start a new group
       const group: SpeakerGroup = {
         speaker: label,
         finalText: '',
         interimText: '',
         key: `group-${groups.length}-${speakerKey}`,
       };
-
       if (segment.isFinal) {
         group.finalText = segment.text.trim();
       } else {
         group.interimText = segment.text.trim();
       }
-
       groups.push(group);
     }
   }
@@ -94,7 +77,6 @@ export function TranscriptView({ segments, speakerNames }: TranscriptViewProps) 
   );
 
   useEffect(() => {
-    // Minimal delay (~1 frame) to ensure layout is complete before scrolling
     const timer = setTimeout(() => {
       scrollRef.current?.scrollToEnd({ animated: true });
     }, 16);
@@ -108,8 +90,13 @@ export function TranscriptView({ segments, speakerNames }: TranscriptViewProps) 
   if (segments.length === 0) {
     return (
       <View style={styles.emptyContainer}>
-        <Text style={styles.emptyText}>Listening...</Text>
-        <Text style={styles.emptySubtext}>Start talking and the transcript will appear here</Text>
+        <View style={styles.emptyIconWrap}>
+          <Ionicons name="mic-outline" size={28} color={colors.textTertiary} />
+        </View>
+        <Text style={styles.emptyText}>Waiting for speech...</Text>
+        <Text style={styles.emptySubtext}>
+          Start talking and the live transcript{'\n'}will appear here
+        </Text>
       </View>
     );
   }
@@ -123,19 +110,25 @@ export function TranscriptView({ segments, speakerNames }: TranscriptViewProps) 
     >
       {groups.map((group) => {
         const color = getSpeakerColor(group.speaker);
-        const fullText = group.finalText + (group.interimText ? (group.finalText ? ' ' : '') + group.interimText : '');
+        const fullText =
+          group.finalText +
+          (group.interimText
+            ? (group.finalText ? ' ' : '') + group.interimText
+            : '');
 
         return (
           <View key={group.key} style={styles.group}>
-            {/* Speaker header */}
+            {/* Speaker pill */}
             <View style={styles.speakerRow}>
-              <View style={[styles.speakerDot, { backgroundColor: color }]} />
-              <Text style={[styles.speakerName, { color }]}>
-                {group.speaker}
-              </Text>
+              <View style={[styles.speakerPill, { backgroundColor: color + '18' }]}>
+                <View style={[styles.speakerDot, { backgroundColor: color }]} />
+                <Text style={[styles.speakerName, { color }]}>
+                  {group.speaker}
+                </Text>
+              </View>
             </View>
 
-            {/* Merged transcript text */}
+            {/* Transcript text */}
             <TouchableOpacity
               activeOpacity={0.7}
               onLongPress={async () => {
@@ -166,12 +159,22 @@ export function TranscriptView({ segments, speakerNames }: TranscriptViewProps) 
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  content: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xl },
+  content: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xxl },
   emptyContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: spacing.xl * 2,
+    paddingVertical: spacing.xxl,
+    gap: spacing.sm,
+  },
+  emptyIconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.surfaceRaised,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.sm,
   },
   emptyText: {
     color: colors.textSecondary,
@@ -181,36 +184,43 @@ const styles = StyleSheet.create({
   emptySubtext: {
     color: colors.textTertiary,
     fontSize: fontSize.sm,
-    marginTop: spacing.xs,
     textAlign: 'center',
+    lineHeight: 20,
   },
   group: {
-    marginBottom: spacing.md,
+    marginBottom: spacing.lg,
   },
   speakerRow: {
     flexDirection: 'row',
+    marginBottom: spacing.xs + 2,
+  },
+  speakerPill: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 4,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: 3,
+    borderRadius: radius.full,
+    gap: 5,
   },
   speakerDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: spacing.xs,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   speakerName: {
     fontSize: fontSize.xs,
     fontWeight: '700',
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0.6,
   },
   textContainer: {
-    marginLeft: 8 + spacing.xs, // Align with text after dot
+    paddingLeft: spacing.sm,
   },
   text: {
     color: colors.text,
     fontSize: fontSize.md,
-    lineHeight: 22,
+    lineHeight: 24,
+    letterSpacing: 0.1,
   },
   textInterim: {
     color: colors.textTertiary,

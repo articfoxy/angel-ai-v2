@@ -25,15 +25,16 @@ export function MainTabs() {
           backgroundColor: colors.surface,
           borderTopColor: colors.border,
           borderTopWidth: 1,
-          height: 85,
-          paddingBottom: 30,
-          paddingTop: 8,
+          height: 84,
+          paddingBottom: 28,
+          paddingTop: 10,
         },
-        tabBarActiveTintColor: colors.primary,
+        tabBarActiveTintColor: colors.text,
         tabBarInactiveTintColor: colors.textTertiary,
         tabBarLabelStyle: {
           fontSize: fontSize.xs,
-          fontWeight: '600',
+          fontWeight: '500',
+          marginTop: 2,
         },
       }}
     >
@@ -41,8 +42,8 @@ export function MainTabs() {
         name="Start"
         component={StartScreen}
         options={{
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="radio" size={size} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'radio' : 'radio-outline'} size={22} color={color} />
           ),
         }}
       />
@@ -50,8 +51,8 @@ export function MainTabs() {
         name="Memory"
         component={MemoryScreen}
         options={{
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="cube" size={size} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'layers' : 'layers-outline'} size={22} color={color} />
           ),
         }}
       />
@@ -59,8 +60,8 @@ export function MainTabs() {
         name="Skills"
         component={SkillsScreen}
         options={{
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="flash" size={size} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'flash' : 'flash-outline'} size={22} color={color} />
           ),
         }}
       />
@@ -68,8 +69,8 @@ export function MainTabs() {
         name="Settings"
         component={SettingsScreen}
         options={{
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="settings" size={size} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'settings' : 'settings-outline'} size={22} color={color} />
           ),
         }}
       />

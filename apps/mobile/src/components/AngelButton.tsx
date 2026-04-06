@@ -6,9 +6,13 @@ import Animated, {
   useAnimatedStyle,
   withRepeat,
   withTiming,
+  withSequence,
+  withSpring,
   Easing,
+  interpolateColor,
 } from 'react-native-reanimated';
-import { colors, spacing, fontSize } from '../theme';
+import { Ionicons } from '@expo/vector-icons';
+import { colors, spacing, fontSize, radius } from '../theme';
 
 interface AngelButtonProps {
   onPress: () => void;
@@ -16,52 +20,138 @@ interface AngelButtonProps {
 }
 
 export function AngelButton({ onPress, isActive }: AngelButtonProps) {
-  const pulseScale = useSharedValue(1);
-  const pulseOpacity = useSharedValue(0.6);
+  // Outer ring pulse
+  const ringScale = useSharedValue(1);
+  const ringOpacity = useSharedValue(0);
+
+  // Second ring (staggered)
+  const ring2Scale = useSharedValue(1);
+  const ring2Opacity = useSharedValue(0);
+
+  // Button glow
+  const glowIntensity = useSharedValue(0);
 
   useEffect(() => {
     if (isActive) {
-      pulseScale.value = withRepeat(
-        withTiming(1.3, { duration: 1500, easing: Easing.inOut(Easing.ease) }),
-        -1,
-        true
+      // Ring 1
+      ringScale.value = withRepeat(
+        withSequence(
+          withTiming(1, { duration: 0 }),
+          withTiming(1.6, { duration: 2000, easing: Easing.out(Easing.ease) })
+        ),
+        -1
       );
-      pulseOpacity.value = withRepeat(
-        withTiming(0, { duration: 1500, easing: Easing.inOut(Easing.ease) }),
-        -1,
-        true
+      ringOpacity.value = withRepeat(
+        withSequence(
+          withTiming(0.5, { duration: 0 }),
+          withTiming(0, { duration: 2000, easing: Easing.in(Easing.ease) })
+        ),
+        -1
+      );
+      // Ring 2 (offset)
+      setTimeout(() => {
+        ring2Scale.value = withRepeat(
+          withSequence(
+            withTiming(1, { duration: 0 }),
+            withTiming(1.6, { duration: 2000, easing: Easing.out(Easing.ease) })
+          ),
+          -1
+        );
+        ring2Opacity.value = withRepeat(
+          withSequence(
+            withTiming(0.4, { duration: 0 }),
+            withTiming(0, { duration: 2000, easing: Easing.in(Easing.ease) })
+          ),
+          -1
+        );
+      }, 800);
+
+      glowIntensity.value = withRepeat(
+        withSequence(
+          withTiming(1, { duration: 1200, easing: Easing.inOut(Easing.ease) }),
+          withTiming(0.4, { duration: 1200, easing: Easing.inOut(Easing.ease) })
+        ),
+        -1
       );
     } else {
-      pulseScale.value = withTiming(1, { duration: 300 });
-      pulseOpacity.value = withTiming(0.6, { duration: 300 });
+      ringScale.value = withTiming(1, { duration: 400 });
+      ringOpacity.value = withTiming(0, { duration: 400 });
+      ring2Scale.value = withTiming(1, { duration: 400 });
+      ring2Opacity.value = withTiming(0, { duration: 400 });
+      glowIntensity.value = withTiming(0, { duration: 400 });
     }
   }, [isActive]);
 
-  const pulseStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: pulseScale.value }],
-    opacity: pulseOpacity.value,
+  const ringStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: ringScale.value }],
+    opacity: ringOpacity.value,
   }));
+
+  const ring2Style = useAnimatedStyle(() => ({
+    transform: [{ scale: ring2Scale.value }],
+    opacity: ring2Opacity.value,
+  }));
+
+  const glowStyle = useAnimatedStyle(() => ({
+    shadowOpacity: 0.15 + glowIntensity.value * 0.4,
+    shadowRadius: 20 + glowIntensity.value * 20,
+  }));
+
+  const SIZE = 120;
+  const RING_SIZE = SIZE + 40;
 
   return (
     <View style={styles.container}>
-      {isActive && (
-        <Animated.View style={[styles.pulseRing, pulseStyle]}>
+      {/* Pulse rings */}
+      <Animated.View
+        style={[
+          styles.ring,
+          { width: RING_SIZE, height: RING_SIZE, borderRadius: RING_SIZE / 2 },
+          ringStyle,
+        ]}
+      />
+      <Animated.View
+        style={[
+          styles.ring,
+          { width: RING_SIZE, height: RING_SIZE, borderRadius: RING_SIZE / 2 },
+          ring2Style,
+        ]}
+      />
+
+      {/* Main button */}
+      <Animated.View
+        style={[
+          {
+            shadowColor: isActive ? colors.success : colors.primary,
+            shadowOffset: { width: 0, height: 0 },
+            elevation: 8,
+          },
+          glowStyle,
+        ]}
+      >
+        <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
           <LinearGradient
-            colors={['#6366f1', '#8b5cf6']}
-            style={styles.pulseGradient}
-          />
-        </Animated.View>
-      )}
-      <TouchableOpacity onPress={onPress} activeOpacity={0.8}>
-        <LinearGradient
-          colors={isActive ? ['#22c55e', '#16a34a'] : ['#6366f1', '#8b5cf6']}
-          style={styles.button}
-        >
-          <Text style={styles.icon}>✦</Text>
-        </LinearGradient>
-      </TouchableOpacity>
-      <Text style={styles.label}>
-        {isActive ? 'Tap to Stop' : 'Come Alive'}
+            colors={
+              isActive
+                ? ['#34d399', '#059669']
+                : ['#7c7fff', '#6366f1']
+            }
+            start={{ x: 0.2, y: 0 }}
+            end={{ x: 0.8, y: 1 }}
+            style={[styles.button, { width: SIZE, height: SIZE, borderRadius: SIZE / 2 }]}
+          >
+            <Ionicons
+              name={isActive ? 'radio' : 'mic'}
+              size={36}
+              color="#fff"
+            />
+          </LinearGradient>
+        </TouchableOpacity>
+      </Animated.View>
+
+      {/* Label */}
+      <Text style={[styles.label, isActive && styles.labelActive]}>
+        {isActive ? 'Listening...' : 'Start Session'}
       </Text>
     </View>
   );
@@ -71,39 +161,26 @@ const styles = StyleSheet.create({
   container: {
     alignItems: 'center',
     justifyContent: 'center',
+    height: 200,
   },
-  pulseRing: {
+  ring: {
     position: 'absolute',
-    width: 160,
-    height: 160,
-    borderRadius: 80,
-    overflow: 'hidden',
-  },
-  pulseGradient: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 80,
+    borderWidth: 1.5,
+    borderColor: colors.success,
   },
   button: {
-    width: 140,
-    height: 140,
-    borderRadius: 70,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#6366f1',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 20,
-    elevation: 10,
-  },
-  icon: {
-    fontSize: 52,
-    color: colors.text,
   },
   label: {
-    marginTop: spacing.md,
+    marginTop: spacing.lg,
     color: colors.textSecondary,
-    fontSize: fontSize.lg,
+    fontSize: fontSize.md,
+    fontWeight: '500',
+    letterSpacing: 0.3,
+  },
+  labelActive: {
+    color: colors.success,
     fontWeight: '600',
   },
 });

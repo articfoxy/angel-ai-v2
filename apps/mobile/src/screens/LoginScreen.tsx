@@ -81,7 +81,7 @@ export function LoginScreen() {
   };
 
   return (
-    <LinearGradient colors={['#0a0a0f', '#12122a', '#0a0a0f']} style={styles.gradientBg}>
+    <LinearGradient colors={['#050507', '#0d0d14', '#050507']} style={styles.gradientBg}>
       <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
       <KeyboardAvoidingView
         style={styles.container}

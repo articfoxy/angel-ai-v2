@@ -1,16 +1,44 @@
+/**
+ * Angel AI v2 — Design System
+ *
+ * Inspired by Linear, Arc, and Apple's HIG.
+ * Dark-first, with refined contrast, generous spacing,
+ * and a restrained accent palette.
+ */
+
 export const colors = {
-  bg: '#0a0a0f',
-  surface: '#1a1a2e',
-  surfaceHover: '#252542',
-  primary: '#6366f1',
-  primaryHover: '#818cf8',
-  success: '#22c55e',
-  warning: '#f59e0b',
-  danger: '#ef4444',
-  text: '#ffffff',
-  textSecondary: '#9ca3af',
-  textTertiary: '#6b7280',
-  border: '#2d2d4a',
+  // Backgrounds
+  bg: '#050507',
+  surface: '#111113',
+  surfaceRaised: '#19191d',
+  surfaceHover: '#222228',
+
+  // Accent
+  primary: '#7c7fff',
+  primaryHover: '#9b9eff',
+  primaryMuted: 'rgba(124, 127, 255, 0.12)',
+  primaryBorder: 'rgba(124, 127, 255, 0.25)',
+
+  // Semantic
+  success: '#34d399',
+  successMuted: 'rgba(52, 211, 153, 0.12)',
+  warning: '#fbbf24',
+  warningMuted: 'rgba(251, 191, 36, 0.12)',
+  danger: '#f87171',
+  dangerMuted: 'rgba(248, 113, 113, 0.12)',
+  info: '#38bdf8',
+  infoMuted: 'rgba(56, 189, 248, 0.12)',
+
+  // Text
+  text: '#ececf1',
+  textSecondary: '#8e8ea0',
+  textTertiary: '#565669',
+
+  // Structure
+  border: 'rgba(255, 255, 255, 0.06)',
+  borderSubtle: 'rgba(255, 255, 255, 0.04)',
+  divider: 'rgba(255, 255, 255, 0.05)',
+  overlay: 'rgba(0, 0, 0, 0.6)',
 } as const;
 
 export const spacing = {
@@ -19,13 +47,48 @@ export const spacing = {
   md: 16,
   lg: 24,
   xl: 32,
+  xxl: 48,
 } as const;
 
 export const fontSize = {
-  xs: 10,
-  sm: 12,
-  md: 14,
+  xs: 11,
+  sm: 13,
+  md: 15,
+  lg: 17,
+  xl: 22,
+  xxl: 32,
+  hero: 40,
+} as const;
+
+export const radius = {
+  sm: 8,
+  md: 12,
   lg: 16,
   xl: 20,
-  xxl: 28,
+  full: 9999,
+} as const;
+
+/** Shared shadow presets */
+export const shadows = {
+  sm: {
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  md: {
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  glow: (color: string) => ({
+    shadowColor: color,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    elevation: 6,
+  }),
 } as const;

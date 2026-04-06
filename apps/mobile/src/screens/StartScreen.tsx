@@ -30,7 +30,7 @@ import { useApi } from '../hooks/useApi';
 import { connectSocket, disconnectSocket, getSocket, onSocketStateChange } from '../services/socket';
 import { requestMicPermission, startRecording, stopRecording } from '../services/audio';
 import { api } from '../services/api';
-import { colors, spacing, fontSize } from '../theme';
+import { colors, spacing, fontSize, radius } from '../theme';
 import type { Session, SessionsListResponse, TranscriptSegment, WhisperCardData } from '../types';
 
 /** Session-specific socket events that we register listeners for */
@@ -363,7 +363,7 @@ export function StartScreen() {
       {/* Reconnecting banner */}
       {isReconnecting && isActive && (
         <View style={styles.reconnectBanner}>
-          <ActivityIndicator size="small" color="#000" />
+          <ActivityIndicator size="small" color={colors.warning} />
           <Text style={styles.reconnectText}>Reconnecting...</Text>
         </View>
       )}
@@ -427,7 +427,7 @@ export function StartScreen() {
               <View style={styles.emptyState}>
                 <Ionicons name="mic-outline" size={32} color={colors.textTertiary} />
                 <Text style={styles.emptyText}>No conversations yet</Text>
-                <Text style={styles.emptySubtext}>Tap "Come Alive" to start your first session</Text>
+                <Text style={styles.emptySubtext}>Tap Start Session to begin</Text>
               </View>
             )}
           </View>
@@ -441,75 +441,84 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   header: {
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.md,
   },
   appTitle: {
     color: colors.text,
     fontSize: fontSize.xxl,
     fontWeight: '700',
+    letterSpacing: -0.5,
   },
   activeRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    marginTop: spacing.xs,
+    marginTop: spacing.xs + 2,
   },
   activeDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#22c55e',
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: colors.success,
   },
   activeText: {
-    color: '#22c55e',
-    fontSize: fontSize.sm,
+    color: colors.success,
+    fontSize: fontSize.xs,
     fontWeight: '700',
-    letterSpacing: 1,
+    letterSpacing: 1.2,
   },
   timer: {
     color: colors.textSecondary,
     fontSize: fontSize.sm,
-    fontWeight: '600',
+    fontWeight: '500',
+    fontVariant: ['tabular-nums'],
   },
   reconnectBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing.sm,
-    backgroundColor: '#facc15',
-    paddingVertical: spacing.xs + 2,
+    backgroundColor: colors.warningMuted,
+    paddingVertical: spacing.sm,
     paddingHorizontal: spacing.md,
+    marginHorizontal: spacing.lg,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: 'rgba(251, 191, 36, 0.2)',
   },
   reconnectText: {
-    color: '#000',
+    color: colors.warning,
     fontSize: fontSize.sm,
     fontWeight: '600',
   },
   activeContainer: { flex: 1 },
-  whisperSection: { marginBottom: spacing.sm },
+  whisperSection: { marginBottom: spacing.sm, marginTop: spacing.xs },
   activeButtonRow: {
     paddingVertical: spacing.md,
     alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
-  idleContent: { paddingBottom: spacing.xl },
+  idleContent: { paddingBottom: spacing.xxl },
   angelSection: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: spacing.xl * 2,
+    paddingVertical: spacing.xxl * 1.5,
   },
-  historySection: { marginTop: spacing.md },
+  historySection: { marginTop: spacing.sm },
   sectionTitle: {
-    color: colors.textSecondary,
-    fontSize: fontSize.sm,
-    fontWeight: '700',
+    color: colors.textTertiary,
+    fontSize: fontSize.xs,
+    fontWeight: '600',
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 1,
     paddingHorizontal: spacing.lg,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.md,
   },
   emptyState: {
     alignItems: 'center',
-    paddingVertical: spacing.xl,
+    paddingVertical: spacing.xxl,
     gap: spacing.sm,
   },
   emptyText: {
@@ -519,6 +528,7 @@ const styles = StyleSheet.create({
   },
   emptySubtext: {
     color: colors.textTertiary,
-    fontSize: fontSize.md,
+    fontSize: fontSize.sm,
+    textAlign: 'center',
   },
 });
