@@ -133,13 +133,22 @@ export function StartScreen() {
 
     sock.on('transcript', (data: TranscriptSegment) => {
       setSegments((prev) => {
-        const existing = prev.findIndex((s) => s.id === data.id);
+        let next = prev;
+
+        // When a final segment arrives, remove the stale interim for that speaker
+        // to prevent unbounded memory growth over long sessions.
+        if (data.isFinal && data.speaker) {
+          const interimId = `interim-${data.speaker.replace('speaker_', '')}`;
+          next = prev.filter((s) => s.id !== interimId);
+        }
+
+        const existing = next.findIndex((s) => s.id === data.id);
         if (existing >= 0) {
-          const updated = [...prev];
+          const updated = [...next];
           updated[existing] = data;
           return updated;
         }
-        return [...prev, data];
+        return [...next, data];
       });
     });
 

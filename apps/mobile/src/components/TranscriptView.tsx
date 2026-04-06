@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useMemo } from 'react';
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert, Clipboard } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import type { TranscriptSegment } from '../types';
 import { colors, spacing, fontSize } from '../theme';
 
@@ -137,8 +138,8 @@ export function TranscriptView({ segments, speakerNames }: TranscriptViewProps) 
             {/* Merged transcript text */}
             <TouchableOpacity
               activeOpacity={0.7}
-              onLongPress={() => {
-                Clipboard.setString(fullText);
+              onLongPress={async () => {
+                await Clipboard.setStringAsync(fullText);
                 Alert.alert('Copied', 'Text copied to clipboard');
               }}
               style={styles.textContainer}
