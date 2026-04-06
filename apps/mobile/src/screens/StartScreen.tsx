@@ -25,23 +25,45 @@ import { WhisperCard } from '../components/WhisperCard';
 import { SessionCard } from '../components/SessionCard';
 import { useAuth } from '../hooks/useAuth';
 import { useApi } from '../hooks/useApi';
-import { connectSocket, disconnectSocket, getSocket } from '../services/socket';
+import { connectSocket, disconnectSocket, getSocket, onSocketStateChange } from '../services/socket';
 import { requestMicPermission, startRecording, stopRecording } from '../services/audio';
 import { api } from '../services/api';
 import { colors, spacing, fontSize } from '../theme';
 import type { Session, SessionsListResponse, TranscriptSegment, WhisperCardData } from '../types';
+
+/** Session-specific socket events that we register listeners for */
+const SESSION_EVENTS = [
+  'transcript',
+  'whisper',
+  'speaker:identified',
+  'session:debrief',
+  'session:timeout',
+] as const;
 
 export function StartScreen() {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
   const { user } = useAuth();
   const [isActive, setIsActive] = useState(false);
+  const [isReconnecting, setIsReconnecting] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
   const [whisperCards, setWhisperCards] = useState<WhisperCardData[]>([]);
   const [speakerNames, setSpeakerNames] = useState<Record<string, string>>({});
   const [elapsed, setElapsed] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Keep refs so socket callbacks can read the latest values
+  const isActiveRef = useRef(false);
+  const sessionIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   // Pulsing active dot
   const dotOpacity = useSharedValue(1);
@@ -82,14 +104,114 @@ export function StartScreen() {
     return `${m}:${s}`;
   };
 
+  /**
+   * Remove all session-specific socket listeners.
+   * Safe to call even if socket is null or listeners were never registered.
+   */
+  const cleanupSessionListeners = useCallback(() => {
+    const sock = getSocket();
+    if (!sock) return;
+    for (const event of SESSION_EVENTS) {
+      sock.off(event);
+    }
+  }, []);
+
+  /**
+   * Register session-specific socket listeners.
+   * Removes any existing listeners first to prevent duplicates on reconnect.
+   */
+  const registerSessionListeners = useCallback((sock: ReturnType<typeof getSocket>) => {
+    if (!sock) return;
+
+    // Remove stale listeners before adding fresh ones
+    for (const event of SESSION_EVENTS) {
+      sock.off(event);
+    }
+
+    sock.on('transcript', (data: TranscriptSegment) => {
+      setSegments((prev) => {
+        const existing = prev.findIndex((s) => s.id === data.id);
+        if (existing >= 0) {
+          const updated = [...prev];
+          updated[existing] = data;
+          return updated;
+        }
+        return [...prev, data];
+      });
+    });
+
+    sock.on('whisper', (data: WhisperCardData) => {
+      setWhisperCards((prev) => [data, ...prev]);
+    });
+
+    sock.on('speaker:identified', (data: { speakerId: string; label: string }) => {
+      setSpeakerNames((prev) => ({ ...prev, [data.speakerId]: data.label }));
+    });
+
+    sock.on('session:debrief', (data: { sessionId: string }) => {
+      // Session ended server-side, navigate to debrief
+      stopRecording().catch(() => {});
+      if (timerRef.current) clearInterval(timerRef.current);
+      setIsActive(false);
+      setSessionId(null);
+      setSegments([]);
+      setWhisperCards([]);
+      setSpeakerNames({});
+      setElapsed(0);
+      cleanupSessionListeners();
+      disconnectSocket();
+      refetchSessions();
+      navigation.navigate('Debrief', { sessionId: data.sessionId });
+    });
+
+    sock.on('session:timeout', (data: { reason: string; message: string }) => {
+      // Server timed out the session
+      stopRecording().catch(() => {});
+      if (timerRef.current) clearInterval(timerRef.current);
+      setIsActive(false);
+      setSessionId(null);
+      setSegments([]);
+      setWhisperCards([]);
+      setSpeakerNames({});
+      setElapsed(0);
+      cleanupSessionListeners();
+      disconnectSocket();
+      refetchSessions();
+      Alert.alert('Session Ended', data.message || 'Session timed out');
+    });
+  }, [cleanupSessionListeners, navigation, refetchSessions]);
+
+  // Subscribe to socket connection state changes
+  useEffect(() => {
+    const unsubscribe = onSocketStateChange((connected) => {
+      if (!isActiveRef.current) return; // Only care during active sessions
+
+      if (!connected) {
+        setIsReconnecting(true);
+      } else {
+        setIsReconnecting(false);
+        // Socket reconnected during an active session — re-register listeners
+        // and re-emit session:start so the server resumes the session
+        const sock = getSocket();
+        if (sock && sessionIdRef.current) {
+          registerSessionListeners(sock);
+          sock.emit('session:start', { sessionId: sessionIdRef.current });
+        }
+      }
+    });
+
+    return unsubscribe;
+  }, [registerSessionListeners]);
+
   // Clean up recording AND socket on unmount (e.g. if user navigates away while active)
   useEffect(() => {
     return () => {
       stopRecording().catch(() => {});
+      cleanupSessionListeners();
       disconnectSocket();
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, []);
+  }, [cleanupSessionListeners]);
 
   const handleToggle = async () => {
     if (isActive) {
@@ -101,9 +223,11 @@ export function StartScreen() {
       if (socket && sessionId) {
         socket.emit('session:stop', { sessionId });
       }
+      cleanupSessionListeners();
       disconnectSocket();
       if (timerRef.current) clearInterval(timerRef.current);
       setIsActive(false);
+      setIsReconnecting(false);
       setSessionId(null);
       setSegments([]);
       setWhisperCards([]);
@@ -127,6 +251,7 @@ export function StartScreen() {
         const session = await api.post<Session>('sessions', {});
         setSessionId(session.id);
         setIsActive(true);
+        setIsReconnecting(false);
         setElapsed(0);
 
         timerRef.current = setInterval(() => {
@@ -136,6 +261,9 @@ export function StartScreen() {
         const socket = await connectSocket();
         socket.emit('session:start', { sessionId: session.id });
 
+        // Register all session-specific listeners (removes stale ones first)
+        registerSessionListeners(socket);
+
         // Start audio recording and stream chunks to the server
         await startRecording((audioBase64: string) => {
           const currentSocket = getSocket();
@@ -143,60 +271,12 @@ export function StartScreen() {
             currentSocket.emit('audio', audioBase64);
           }
         });
-
-        socket.on('transcript', (data: TranscriptSegment) => {
-          setSegments((prev) => {
-            const existing = prev.findIndex((s) => s.id === data.id);
-            if (existing >= 0) {
-              const updated = [...prev];
-              updated[existing] = data;
-              return updated;
-            }
-            return [...prev, data];
-          });
-        });
-
-        socket.on('whisper', (data: WhisperCardData) => {
-          setWhisperCards((prev) => [data, ...prev]);
-        });
-
-        socket.on('speaker:identified', (data: { speakerId: string; label: string }) => {
-          setSpeakerNames((prev) => ({ ...prev, [data.speakerId]: data.label }));
-        });
-
-        socket.on('session:debrief', (data: { sessionId: string }) => {
-          // Session ended server-side, navigate to debrief
-          stopRecording().catch(() => {});
-          if (timerRef.current) clearInterval(timerRef.current);
-          setIsActive(false);
-          setSessionId(null);
-          setSegments([]);
-          setWhisperCards([]);
-          setSpeakerNames({});
-          setElapsed(0);
-          disconnectSocket();
-          refetchSessions();
-          navigation.navigate('Debrief', { sessionId: data.sessionId });
-        });
-
-        socket.on('session:timeout', (data: { reason: string; message: string }) => {
-          // Server timed out the session
-          stopRecording().catch(() => {});
-          if (timerRef.current) clearInterval(timerRef.current);
-          setIsActive(false);
-          setSessionId(null);
-          setSegments([]);
-          setWhisperCards([]);
-          setSpeakerNames({});
-          setElapsed(0);
-          disconnectSocket();
-          refetchSessions();
-          Alert.alert('Session Ended', data.message || 'Session timed out');
-        });
       } catch (err) {
         console.error('Failed to start session:', err);
         await stopRecording();
+        cleanupSessionListeners();
         setIsActive(false);
+        setIsReconnecting(false);
       }
     }
   };
@@ -216,6 +296,14 @@ export function StartScreen() {
           )}
         </View>
       </View>
+
+      {/* Reconnecting banner */}
+      {isReconnecting && isActive && (
+        <View style={styles.reconnectBanner}>
+          <ActivityIndicator size="small" color="#000" />
+          <Text style={styles.reconnectText}>Reconnecting...</Text>
+        </View>
+      )}
 
       {isActive ? (
         /* Active Session View */
@@ -308,6 +396,20 @@ const styles = StyleSheet.create({
   },
   timer: {
     color: colors.textSecondary,
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+  },
+  reconnectBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    backgroundColor: '#facc15',
+    paddingVertical: spacing.xs + 2,
+    paddingHorizontal: spacing.md,
+  },
+  reconnectText: {
+    color: '#000',
     fontSize: fontSize.sm,
     fontWeight: '600',
   },

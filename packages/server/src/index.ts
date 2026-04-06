@@ -17,6 +17,9 @@ export const prisma = new PrismaClient();
 
 const app = express();
 const server = http.createServer(app);
+// React Native (and other native mobile) clients don't send an Origin header,
+// so wildcard origin is the correct setting for a mobile-first Socket.io server.
+// If a web client is added later, replace '*' with an explicit allowlist.
 const io = new SocketServer(server, {
   cors: { origin: '*', methods: ['GET', 'POST'] },
 });

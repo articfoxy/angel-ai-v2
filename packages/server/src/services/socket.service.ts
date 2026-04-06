@@ -127,6 +127,12 @@ export function setupSocketHandlers(io: Server) {
       deepgram = new DeepgramService({
         onTranscript: (data) => {
           socket.emit('transcript', data);
+
+          // Reset idle timer on ANY transcript (including interim results).
+          // Interim results prove the user is still speaking even if no
+          // final segment has landed yet.
+          resetIdleTimer();
+
           // Buffer transcript for whisper generation
           if (data.isFinal && data.text.trim()) {
             const label = data.speakerLabel || data.speaker || 'Unknown';
@@ -138,9 +144,6 @@ export function setupSocketHandlers(io: Server) {
 
             // Start whisper timer on first real transcript segment (lazy start)
             startWhisperTimer(userId, session.skills);
-
-            // Reset idle timer on each new transcript
-            resetIdleTimer();
           }
         },
         onSpeakerIdentified: (speakerId, label) => {

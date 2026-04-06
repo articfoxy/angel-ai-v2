@@ -7,6 +7,40 @@ import {
 
 let recording: Audio.Recording | null = null;
 let pollingInterval: ReturnType<typeof setInterval> | null = null;
+let processing = false;
+
+/** WAV header is 44 bytes = ceil(44 * 4/3) = 60 base64 chars */
+const WAV_HEADER_BASE64_LEN = 60;
+
+/** Interval between chunk cycles (ms). 500ms balances chunk size vs latency. */
+const CHUNK_INTERVAL_MS = 500;
+
+const RECORDING_OPTIONS: Audio.RecordingOptions = {
+  isMeteringEnabled: false,
+  android: {
+    extension: '.wav',
+    outputFormat: Audio.AndroidOutputFormat.DEFAULT,
+    audioEncoder: Audio.AndroidAudioEncoder.DEFAULT,
+    sampleRate: 16000,
+    numberOfChannels: 1,
+    bitRate: 256000,
+  },
+  ios: {
+    extension: '.wav',
+    outputFormat: Audio.IOSOutputFormat.LINEARPCM,
+    audioQuality: Audio.IOSAudioQuality.HIGH,
+    sampleRate: 16000,
+    numberOfChannels: 1,
+    bitRate: 256000,
+    linearPCMBitDepth: 16,
+    linearPCMIsBigEndian: false,
+    linearPCMIsFloat: false,
+  },
+  web: {
+    mimeType: 'audio/wav',
+    bitsPerSecond: 256000,
+  },
+};
 
 /**
  * Request microphone permission.
@@ -19,10 +53,14 @@ export async function requestMicPermission(): Promise<boolean> {
 
 /**
  * Start audio recording and stream base64-encoded PCM chunks
- * via the onAudioData callback at ~250ms intervals.
+ * via the onAudioData callback at ~500ms intervals.
  *
  * The recording is configured for linear16 PCM, 16kHz, mono —
  * matching the server's Deepgram configuration.
+ *
+ * A processing lock prevents the interval from firing while
+ * the previous stop/read/start cycle is still in progress,
+ * eliminating race conditions that caused overlapping async ops.
  */
 export async function startRecording(
   onAudioData: (data: string) => void
@@ -37,89 +75,68 @@ export async function startRecording(
     staysActiveInBackground: true,
   });
 
-  const recordingOptions: Audio.RecordingOptions = {
-    isMeteringEnabled: false,
-    android: {
-      extension: '.wav',
-      outputFormat: Audio.AndroidOutputFormat.DEFAULT,
-      audioEncoder: Audio.AndroidAudioEncoder.DEFAULT,
-      sampleRate: 16000,
-      numberOfChannels: 1,
-      bitRate: 256000,
-    },
-    ios: {
-      extension: '.wav',
-      outputFormat: Audio.IOSOutputFormat.LINEARPCM,
-      audioQuality: Audio.IOSAudioQuality.HIGH,
-      sampleRate: 16000,
-      numberOfChannels: 1,
-      bitRate: 256000,
-      linearPCMBitDepth: 16,
-      linearPCMIsBigEndian: false,
-      linearPCMIsFloat: false,
-    },
-    web: {
-      mimeType: 'audio/wav',
-      bitsPerSecond: 256000,
-    },
-  };
-
   recording = new Audio.Recording();
-  await recording.prepareToRecordAsync(recordingOptions);
+  await recording.prepareToRecordAsync(RECORDING_OPTIONS);
   await recording.startAsync();
 
-  // Poll: stop current recording, read its file, send data,
-  // then start a new recording. This gives us real PCM chunks.
+  processing = false;
+
   pollingInterval = setInterval(async () => {
-    if (!recording) return;
+    // Skip if previous cycle is still running or recording was cleared
+    if (processing || !recording) return;
+    processing = true;
 
     try {
       const currentRecording = recording;
 
-      // Stop the current short recording
+      // Stop the current recording to finalize the WAV file
       await currentRecording.stopAndUnloadAsync();
       const uri = currentRecording.getURI();
 
-      // Immediately start a new recording so we don't miss audio
+      // Start a new recording immediately to minimize the gap
       recording = new Audio.Recording();
-      await recording.prepareToRecordAsync(recordingOptions);
+      await recording.prepareToRecordAsync(RECORDING_OPTIONS);
       await recording.startAsync();
 
       // Read the completed chunk, strip WAV header, and send raw PCM
       if (uri) {
-        const base64 = await readAsStringAsync(uri, {
-          encoding: EncodingType.Base64,
-        });
-        if (base64 && base64.length > 0) {
-          // Each chunk is a complete WAV file with a 44-byte header.
-          // Deepgram expects continuous raw PCM — strip the header.
-          // 44 bytes = ceil(44 * 4/3) = 60 base64 chars (with padding)
-          const WAV_HEADER_BASE64_LEN = 60;
-          const rawPcm = base64.length > WAV_HEADER_BASE64_LEN
-            ? base64.substring(WAV_HEADER_BASE64_LEN)
-            : base64;
-          onAudioData(rawPcm);
+        try {
+          const base64 = await readAsStringAsync(uri, {
+            encoding: EncodingType.Base64,
+          });
+          if (base64 && base64.length > WAV_HEADER_BASE64_LEN) {
+            const rawPcm = base64.substring(WAV_HEADER_BASE64_LEN);
+            onAudioData(rawPcm);
+          }
+        } catch (readErr) {
+          console.warn('Failed to read audio chunk file, skipping:', readErr);
         }
-        // Clean up the temp file
-        await deleteAsync(uri, { idempotent: true }).catch(() => {});
+
+        // Clean up the temp file regardless of read success
+        deleteAsync(uri, { idempotent: true }).catch(() => {});
       }
     } catch (err) {
       // If the recording was stopped externally (user pressed stop),
       // the interval will naturally fail — that's expected.
-      console.warn('Audio chunk error (may be normal during stop):', err);
+      console.warn('Audio chunk cycle error (may be normal during stop):', err);
+    } finally {
+      processing = false;
     }
-  }, 250);
+  }, CHUNK_INTERVAL_MS);
 }
 
 /**
  * Stop recording and clean up all resources.
  */
 export async function stopRecording(): Promise<void> {
-  // Clear the polling interval first to prevent race conditions
+  // Clear the polling interval first to prevent new cycles from starting
   if (pollingInterval) {
     clearInterval(pollingInterval);
     pollingInterval = null;
   }
+
+  // Reset the lock so a future startRecording begins clean
+  processing = false;
 
   if (recording) {
     try {

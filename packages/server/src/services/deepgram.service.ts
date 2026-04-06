@@ -16,6 +16,9 @@ interface DeepgramConfig {
   userId: string;
 }
 
+const CONNECTION_TIMEOUT_MS = 5000;
+const MAX_BUFFERED_CHUNKS = 10;
+
 export class DeepgramService {
   private connection: any = null;
   private config: DeepgramConfig;
@@ -23,12 +26,14 @@ export class DeepgramService {
   private speakerCounts: Map<number, number> = new Map();
   private ownerIdentified = false;
   private sessionStartTime: number = 0;
+  private ready = false;
+  private audioBuffer: Buffer[] = [];
 
   constructor(config: DeepgramConfig) {
     this.config = config;
   }
 
-  async connect() {
+  async connect(): Promise<void> {
     const deepgram = createClient(process.env.DEEPGRAM_API_KEY || '');
 
     this.connection = deepgram.listen.live({
@@ -44,11 +49,33 @@ export class DeepgramService {
       vad_events: true,
     });
 
-    // Store session start timestamp when connection is established
-    this.sessionStartTime = Date.now();
+    // Wait for the connection to actually open before returning.
+    // Audio sent before Open fires is silently dropped by Deepgram.
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error(`Deepgram connection timed out after ${CONNECTION_TIMEOUT_MS}ms for session ${this.config.sessionId}`));
+      }, CONNECTION_TIMEOUT_MS);
 
-    this.connection.on(LiveTranscriptionEvents.Open, () => {
-      console.log(`Deepgram connected for session ${this.config.sessionId}`);
+      this.connection.on(LiveTranscriptionEvents.Open, () => {
+        clearTimeout(timeout);
+        this.sessionStartTime = Date.now();
+        this.ready = true;
+
+        // Flush any audio that arrived while we were connecting
+        for (const chunk of this.audioBuffer) {
+          this.connection.send(chunk);
+        }
+        this.audioBuffer = [];
+
+        console.log(`Deepgram connected for session ${this.config.sessionId}`);
+        resolve();
+      });
+
+      // If the connection errors before Open, reject immediately
+      this.connection.on(LiveTranscriptionEvents.Error, (err: any) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
     });
 
     this.connection.on(LiveTranscriptionEvents.Transcript, (data: any) => {
@@ -154,9 +181,15 @@ export class DeepgramService {
   }
 
   sendAudio(data: Buffer) {
-    if (this.connection) {
+    if (!this.connection) return;
+
+    if (this.ready) {
       this.connection.send(data);
+    } else if (this.audioBuffer.length < MAX_BUFFERED_CHUNKS) {
+      // Buffer audio until the connection is ready (up to MAX_BUFFERED_CHUNKS)
+      this.audioBuffer.push(data);
     }
+    // Chunks beyond the buffer limit are dropped to avoid unbounded memory growth
   }
 
   close() {
@@ -164,5 +197,7 @@ export class DeepgramService {
       this.connection.finish();
       this.connection = null;
     }
+    this.ready = false;
+    this.audioBuffer = [];
   }
 }
