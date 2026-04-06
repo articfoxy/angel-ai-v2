@@ -54,6 +54,29 @@ export function SettingsScreen() {
       if (val) keys[provider as ModelProvider] = val;
     }
     setApiKeys(keys);
+
+    // Load BYOK state
+    const savedByok = await SecureStore.getItemAsync('angel_v2_byok_enabled');
+    if (savedByok === 'true') setByok(true);
+    const savedProvider = await SecureStore.getItemAsync('angel_v2_byok_provider');
+    if (savedProvider) setSelectedProvider(savedProvider as ModelProvider);
+  };
+
+  const toggleByok = async (enabled: boolean) => {
+    setByok(enabled);
+    await SecureStore.setItemAsync('angel_v2_byok_enabled', enabled ? 'true' : 'false');
+    if (!enabled) {
+      await SecureStore.deleteItemAsync('angel_v2_byok_provider');
+    } else {
+      await SecureStore.setItemAsync('angel_v2_byok_provider', selectedProvider);
+    }
+  };
+
+  const selectProvider = async (provider: ModelProvider) => {
+    setSelectedProvider(provider);
+    if (byok) {
+      await SecureStore.setItemAsync('angel_v2_byok_provider', provider);
+    }
   };
 
   const saveKey = async (provider: ModelProvider, key: string) => {
@@ -160,7 +183,7 @@ export function SettingsScreen() {
               </View>
               <Switch
                 value={byok}
-                onValueChange={setByok}
+                onValueChange={toggleByok}
                 trackColor={{ false: colors.border, true: colors.primary + '60' }}
                 thumbColor={byok ? colors.primary : colors.textTertiary}
               />
@@ -175,7 +198,7 @@ export function SettingsScreen() {
                   <TouchableOpacity
                     key={p.key}
                     style={[styles.providerCard, selectedProvider === p.key && styles.providerCardActive]}
-                    onPress={() => setSelectedProvider(p.key)}
+                    onPress={() => selectProvider(p.key)}
                   >
                     <Text style={styles.providerIcon}>{p.icon}</Text>
                     <Text style={[

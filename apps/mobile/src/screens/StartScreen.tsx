@@ -9,6 +9,7 @@ import {
   Alert,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
+import * as SecureStore from 'expo-secure-store';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import Animated, {
@@ -39,6 +40,7 @@ const SESSION_EVENTS = [
   'speaker:identified',
   'session:debrief',
   'session:timeout',
+  'session:error',
 ] as const;
 
 export function StartScreen() {
@@ -180,6 +182,22 @@ export function StartScreen() {
       refetchSessions();
       Alert.alert('Session Ended', data.message || 'Session timed out');
     });
+
+    sock.on('session:error', (data: { message: string }) => {
+      // Server-side error (e.g., Deepgram connection failed)
+      stopRecording().catch(() => {});
+      if (timerRef.current) clearInterval(timerRef.current);
+      setIsActive(false);
+      setSessionId(null);
+      setSegments([]);
+      setWhisperCards([]);
+      setSpeakerNames({});
+      setElapsed(0);
+      cleanupSessionListeners();
+      disconnectSocket();
+      refetchSessions();
+      Alert.alert('Session Error', data.message || 'An error occurred during your session');
+    });
   }, [cleanupSessionListeners, navigation, refetchSessions]);
 
   // Subscribe to socket connection state changes
@@ -272,7 +290,22 @@ export function StartScreen() {
         }, 1000);
 
         const socket = await connectSocket();
-        socket.emit('session:start', { sessionId: session.id });
+
+        // Check for BYOK keys and include them in session:start
+        const byokProvider = await SecureStore.getItemAsync('angel_v2_byok_provider');
+        const byokKey = byokProvider
+          ? await SecureStore.getItemAsync(
+              byokProvider === 'anthropic' ? 'angel_v2_anthropic_key'
+              : byokProvider === 'google' ? 'angel_v2_google_key'
+              : 'angel_v2_openai_key'
+            )
+          : null;
+
+        const startPayload: Record<string, unknown> = { sessionId: session.id };
+        if (byokKey) {
+          startPayload.byok = { provider: byokProvider, apiKey: byokKey };
+        }
+        socket.emit('session:start', startPayload);
 
         // Register all session-specific listeners (removes stale ones first)
         registerSessionListeners(socket);

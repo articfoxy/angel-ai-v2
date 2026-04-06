@@ -12,6 +12,7 @@ interface DeepgramConfig {
     isFinal: boolean;
   }) => void;
   onSpeakerIdentified: (speakerId: string, label: string) => void;
+  onError?: (error: string) => void;
   sessionId: string;
   userId: string;
 }
@@ -133,6 +134,9 @@ export class DeepgramService {
 
     this.connection.on(LiveTranscriptionEvents.Error, (err: any) => {
       console.error('Deepgram error:', err);
+      if (this.config.onError) {
+        this.config.onError(`Deepgram streaming error: ${err?.message || 'unknown'}`);
+      }
       // Close the broken connection to prevent hanging state
       this.close();
     });

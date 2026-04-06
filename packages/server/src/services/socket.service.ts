@@ -16,6 +16,12 @@ interface AuthenticatedSocket extends Socket {
   userId?: string;
 }
 
+interface InferenceConfig {
+  provider: 'openai' | 'anthropic' | 'google';
+  apiKey: string;
+  model?: string;
+}
+
 export function setupSocketHandlers(io: Server) {
   const inference = new InferenceService();
 
@@ -70,6 +76,8 @@ export function setupSocketHandlers(io: Server) {
       }, IDLE_TIMEOUT_MS);
     }
 
+    let byokConfig: InferenceConfig | undefined;
+
     function startWhisperTimer(userId: string, sessionSkills: string[]) {
       if (whisperTimer) return; // Already running
       whisperTimer = setInterval(async () => {
@@ -80,7 +88,7 @@ export function setupSocketHandlers(io: Server) {
           const whisper = await inference.generateWhisper(
             userId,
             recentTranscript,
-            undefined, // Use server default keys
+            byokConfig, // Use BYOK keys if provided, else server defaults
             sessionSkills
           );
 
@@ -111,13 +119,28 @@ export function setupSocketHandlers(io: Server) {
       currentSessionId = null;
     }
 
-    socket.on('session:start', async ({ sessionId }: { sessionId: string }) => {
+    socket.on('session:start', async (payload: {
+      sessionId: string;
+      byok?: { provider: string; apiKey: string; model?: string };
+    }) => {
+      const { sessionId } = payload;
       if (!socket.userId) return;
 
       const session = await prisma.session.findFirst({
         where: { id: sessionId, userId: socket.userId },
       });
       if (!session) return;
+
+      // Store BYOK config if client provided it
+      if (payload.byok?.apiKey) {
+        byokConfig = {
+          provider: (payload.byok.provider as 'openai' | 'anthropic' | 'google') || 'openai',
+          apiKey: payload.byok.apiKey,
+          model: payload.byok.model,
+        };
+      } else {
+        byokConfig = undefined;
+      }
 
       transcriptBuffer = [];
       currentSessionId = sessionId;
@@ -129,15 +152,12 @@ export function setupSocketHandlers(io: Server) {
           socket.emit('transcript', data);
 
           // Reset idle timer on ANY transcript (including interim results).
-          // Interim results prove the user is still speaking even if no
-          // final segment has landed yet.
           resetIdleTimer();
 
           // Buffer transcript for whisper generation
           if (data.isFinal && data.text.trim()) {
             const label = data.speakerLabel || data.speaker || 'Unknown';
             transcriptBuffer.push(`[${label}]: ${data.text}`);
-            // Keep rolling 3-min window (~180s of speech)
             if (transcriptBuffer.length > 60) {
               transcriptBuffer = transcriptBuffer.slice(-40);
             }
@@ -149,11 +169,22 @@ export function setupSocketHandlers(io: Server) {
         onSpeakerIdentified: (speakerId, label) => {
           socket.emit('speaker:identified', { speakerId, label });
         },
+        onError: (errorMsg) => {
+          socket.emit('session:error', { sessionId, message: errorMsg });
+        },
         sessionId,
         userId,
       });
 
-      await deepgram.connect();
+      try {
+        await deepgram.connect();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Failed to connect to transcription service';
+        console.error('Deepgram connection failed:', message);
+        socket.emit('session:error', { sessionId, message });
+        cleanupSession();
+        return;
+      }
 
       // Max session duration timeout (2 hours)
       sessionTimer = setTimeout(() => {
