@@ -2,10 +2,8 @@
   "expo": {
     "name": "Angel AI",
     "slug": "angel-ai-v2",
-    "version": "1.0.0",
-    "runtimeVersion": {
-      "policy": "appVersion"
-    },
+    "version": "2.0.0",
+    "runtimeVersion": "2.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -13,11 +11,13 @@
     "owner": "articfoxy",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.angelai.v2",
-      "buildNumber": "1",
+      "bundleIdentifier": "com.angelai.app",
+      "buildNumber": "6",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Angel AI needs microphone access to provide real-time conversation intelligence.",
-        "UIBackgroundModes": ["audio"],
+        "UIBackgroundModes": [
+          "audio"
+        ],
         "NSBluetoothAlwaysUsageDescription": "Angel AI uses Bluetooth to connect to your AirPods for hands-free conversation intelligence.",
         "NSBluetoothPeripheralUsageDescription": "Angel AI uses Bluetooth to connect to your AirPods for hands-free conversation intelligence.",
         "ITSAppUsesNonExemptEncryption": false
@@ -40,7 +40,7 @@
     ],
     "extra": {
       "eas": {
-        "projectId": ""
+        "projectId": "e09202a5-3fdc-4ee6-a646-485b4e99e1c5"
       }
     }
   }

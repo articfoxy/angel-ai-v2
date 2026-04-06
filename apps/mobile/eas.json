@@ -1,0 +1,31 @@
+{
+  "cli": {
+    "version": ">= 15.0.0",
+    "appVersionSource": "local"
+  },
+  "build": {
+    "development": {
+      "distribution": "internal",
+      "ios": {
+        "credentialsSource": "remote",
+        "simulator": false
+      },
+      "developmentClient": true
+    },
+    "production": {
+      "distribution": "store",
+      "ios": {
+        "credentialsSource": "remote"
+      }
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "appleId": "jansentengwn@hotmail.com",
+        "ascAppId": "6761681787",
+        "appleTeamId": "FPW3JJCJCW"
+      }
+    }
+  }
+}

@@ -112,10 +112,12 @@ authRouter.post('/apple', async (req: Request, res: Response) => {
     const key = await appleJwksClient.getSigningKey(decoded.header.kid);
     const signingKey = key.getPublicKey();
 
-    // Verify token
+    // Verify token (audience = bundle ID)
+    const BUNDLE_ID = process.env.APPLE_BUNDLE_ID || 'com.angelai.app';
     const payload = jwt.verify(identityToken, signingKey, {
       algorithms: ['RS256'],
       issuer: 'https://appleid.apple.com',
+      audience: BUNDLE_ID,
     }) as { sub: string; email?: string };
 
     // Find or create user
