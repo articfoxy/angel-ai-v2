@@ -56,6 +56,28 @@ sessionsRouter.post('/', async (req: AuthRequest, res: Response) => {
   }
 });
 
+// Delete session
+sessionsRouter.delete('/:id', async (req: AuthRequest, res: Response) => {
+  try {
+    const session = await prisma.session.findFirst({
+      where: { id: String(req.params.id), userId: String(req.userId) },
+    });
+
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    // Delete related episodes first, then the session
+    await prisma.episode.deleteMany({ where: { sessionId: session.id } });
+    await prisma.session.delete({ where: { id: session.id } });
+
+    res.json({ success: true });
+  } catch {
+    res.status(500).json({ error: 'Failed to delete session' });
+  }
+});
+
 // End session
 sessionsRouter.patch('/:id/end', async (req: AuthRequest, res: Response) => {
   try {

@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, Clipboard } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import type { WhisperCardData } from '../types';
@@ -20,6 +20,12 @@ const TYPE_CONFIG: Record<string, { icon: keyof typeof Ionicons.glyphMap; gradie
 export function WhisperCard({ card }: WhisperCardProps) {
   const config = TYPE_CONFIG[card.type] || TYPE_CONFIG.default;
 
+  const handleCopy = () => {
+    const copyText = card.detail ? `${card.content}\n${card.detail}` : card.content;
+    Clipboard.setString(copyText);
+    Alert.alert('Copied', 'Text copied to clipboard');
+  };
+
   return (
     <View style={styles.container}>
       <LinearGradient
@@ -37,6 +43,9 @@ export function WhisperCard({ card }: WhisperCardProps) {
           <Text style={styles.detail}>{card.detail}</Text>
         )}
       </View>
+      <TouchableOpacity onPress={handleCopy} style={styles.copyButton} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+        <Ionicons name="copy-outline" size={16} color={colors.textTertiary} />
+      </TouchableOpacity>
     </View>
   );
 }
@@ -66,6 +75,11 @@ const styles = StyleSheet.create({
     marginRight: spacing.sm,
   },
   content: { flex: 1 },
+  copyButton: {
+    position: 'absolute',
+    top: spacing.md,
+    right: spacing.md,
+  },
   type: {
     color: colors.textTertiary,
     fontSize: fontSize.xs,

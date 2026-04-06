@@ -23,6 +23,7 @@ export function MemoryScreen() {
   const [activeTab, setActiveTab] = useState<MemoryTab>('core');
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
 
   const { data: coreMemory, isLoading: coreLoading, refetch: refetchCore } =
     useApi<CoreMemory>('memory/core');
@@ -96,11 +97,45 @@ export function MemoryScreen() {
     { key: 'reflections', label: 'Insights', icon: 'sparkles' },
   ];
 
+  const query = searchQuery.trim().toLowerCase();
+
+  const filteredEntities = Array.isArray(entities)
+    ? entities.filter((e) => !query || e.name.toLowerCase().includes(query) || e.aliases.some((a: string) => a.toLowerCase().includes(query)))
+    : [];
+
+  const filteredMemories = Array.isArray(memories)
+    ? memories.filter((m) => !query || m.content.toLowerCase().includes(query) || (m.category && m.category.toLowerCase().includes(query)))
+    : [];
+
+  const filteredReflections = Array.isArray(reflections)
+    ? reflections.filter((r) => !query || r.content.toLowerCase().includes(query))
+    : [];
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
         <Text style={styles.title}>Memory</Text>
         <Text style={styles.subtitle}>What Angel knows about your world</Text>
+      </View>
+
+      {/* Search Bar */}
+      <View style={styles.searchContainer}>
+        <Ionicons name="search" size={16} color={colors.textTertiary} />
+        <TextInput
+          style={styles.searchInput}
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          placeholder="Search memories..."
+          placeholderTextColor={colors.textTertiary}
+          autoCapitalize="none"
+          autoCorrect={false}
+          clearButtonMode="while-editing"
+        />
+        {searchQuery.length > 0 && (
+          <TouchableOpacity onPress={() => setSearchQuery('')}>
+            <Ionicons name="close-circle" size={16} color={colors.textTertiary} />
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Tab Bar */}
@@ -145,8 +180,8 @@ export function MemoryScreen() {
         {activeTab === 'entities' && (
           entitiesLoading ? (
             <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.xl }} />
-          ) : Array.isArray(entities) && entities.length > 0 ? (
-            entities.map((entity) => (
+          ) : filteredEntities.length > 0 ? (
+            filteredEntities.map((entity) => (
               <View key={entity.id} style={styles.entityCard}>
                 <View style={styles.entityHeader}>
                   <Ionicons
@@ -164,6 +199,12 @@ export function MemoryScreen() {
                 )}
               </View>
             ))
+          ) : query ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="search-outline" size={32} color={colors.textTertiary} />
+              <Text style={styles.emptyText}>No results</Text>
+              <Text style={styles.emptySubtext}>No entities match "{searchQuery}"</Text>
+            </View>
           ) : (
             <View style={styles.emptyState}>
               <Ionicons name="people-outline" size={32} color={colors.textTertiary} />
@@ -176,8 +217,8 @@ export function MemoryScreen() {
         {activeTab === 'memories' && (
           memoriesLoading ? (
             <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.xl }} />
-          ) : Array.isArray(memories) && memories.length > 0 ? (
-            memories.map((memory) => (
+          ) : filteredMemories.length > 0 ? (
+            filteredMemories.map((memory) => (
               <View key={memory.id} style={styles.memoryCard}>
                 <Text style={styles.memoryContent}>{memory.content}</Text>
                 <View style={styles.memoryMeta}>
@@ -192,6 +233,12 @@ export function MemoryScreen() {
                 </View>
               </View>
             ))
+          ) : query ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="search-outline" size={32} color={colors.textTertiary} />
+              <Text style={styles.emptyText}>No results</Text>
+              <Text style={styles.emptySubtext}>No memories match "{searchQuery}"</Text>
+            </View>
           ) : (
             <View style={styles.emptyState}>
               <Ionicons name="document-text-outline" size={32} color={colors.textTertiary} />
@@ -204,8 +251,8 @@ export function MemoryScreen() {
         {activeTab === 'reflections' && (
           reflectionsLoading ? (
             <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.xl }} />
-          ) : Array.isArray(reflections) && reflections.length > 0 ? (
-            reflections.map((reflection) => (
+          ) : filteredReflections.length > 0 ? (
+            filteredReflections.map((reflection) => (
               <View key={reflection.id} style={styles.reflectionCard}>
                 <Ionicons name="sparkles" size={16} color={colors.warning} />
                 <View style={styles.reflectionContent}>
@@ -216,6 +263,12 @@ export function MemoryScreen() {
                 </View>
               </View>
             ))
+          ) : query ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="search-outline" size={32} color={colors.textTertiary} />
+              <Text style={styles.emptyText}>No results</Text>
+              <Text style={styles.emptySubtext}>No insights match "{searchQuery}"</Text>
+            </View>
           ) : (
             <View style={styles.emptyState}>
               <Ionicons name="sparkles-outline" size={32} color={colors.textTertiary} />
@@ -234,6 +287,25 @@ const styles = StyleSheet.create({
   header: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
   title: { color: colors.text, fontSize: fontSize.xxl, fontWeight: '700' },
   subtitle: { color: colors.textSecondary, fontSize: fontSize.md, marginTop: spacing.xs },
+  searchContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: 10,
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.md,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: spacing.xs,
+  },
+  searchInput: {
+    flex: 1,
+    color: colors.text,
+    fontSize: fontSize.md,
+    paddingVertical: spacing.xs,
+  },
   tabBar: {
     flexDirection: 'row',
     paddingHorizontal: spacing.md,

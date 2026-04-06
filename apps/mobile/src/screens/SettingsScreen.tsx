@@ -8,11 +8,15 @@ import {
   TextInput,
   Alert,
   Switch,
+  Linking,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as SecureStore from 'expo-secure-store';
+import Constants from 'expo-constants';
 import { useAuth } from '../hooks/useAuth';
+import { api } from '../services/api';
 import { colors, spacing, fontSize } from '../theme';
 
 const API_KEY_STORAGE = {
@@ -34,6 +38,10 @@ export function SettingsScreen() {
   });
   const [showKeys, setShowKeys] = useState(false);
   const [byok, setByok] = useState(false);
+  const [testingKey, setTestingKey] = useState<ModelProvider | null>(null);
+
+  const version = Constants.expoConfig?.version || '2.0.0';
+  const buildNumber = Constants.expoConfig?.ios?.buildNumber || '';
 
   React.useEffect(() => {
     loadKeys();
@@ -55,6 +63,69 @@ export function SettingsScreen() {
       await SecureStore.deleteItemAsync(API_KEY_STORAGE[provider]);
     }
     setApiKeys((prev) => ({ ...prev, [provider]: key }));
+  };
+
+  const testApiKey = async (provider: ModelProvider) => {
+    const key = apiKeys[provider]?.trim();
+    if (!key) {
+      Alert.alert('No Key', 'Please enter an API key first.');
+      return;
+    }
+    setTestingKey(provider);
+    try {
+      let response: Response;
+      if (provider === 'openai') {
+        response = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+          body: JSON.stringify({ model: 'gpt-4o-mini', max_tokens: 5, messages: [{ role: 'user', content: 'Hi' }] }),
+        });
+      } else if (provider === 'anthropic') {
+        response = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01' },
+          body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 5, messages: [{ role: 'user', content: 'Hi' }] }),
+        });
+      } else {
+        response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contents: [{ parts: [{ text: 'Hi' }] }] }),
+        });
+      }
+      if (response.ok) {
+        Alert.alert('Success', `${PROVIDERS.find((p) => p.key === provider)?.name} key is valid.`);
+      } else {
+        const body = await response.text();
+        Alert.alert('Invalid Key', `Status ${response.status}: ${body.slice(0, 200)}`);
+      }
+    } catch (err) {
+      Alert.alert('Error', err instanceof Error ? err.message : 'Network error');
+    } finally {
+      setTestingKey(null);
+    }
+  };
+
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      'Delete Account',
+      'This will permanently delete your account and all associated data. This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete Account',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.delete('auth/account');
+              logout();
+            } catch (err) {
+              Alert.alert('Error', err instanceof Error ? err.message : 'Failed to delete account');
+            }
+          },
+        },
+      ],
+    );
   };
 
   const handleLogout = () => {
@@ -144,15 +215,28 @@ export function SettingsScreen() {
                     />
                   </TouchableOpacity>
                 </View>
-                <TouchableOpacity
-                  style={styles.saveKeyButton}
-                  onPress={() => {
-                    saveKey(selectedProvider, apiKeys[selectedProvider]);
-                    Alert.alert('Saved', `${PROVIDERS.find((p) => p.key === selectedProvider)?.name} key saved securely`);
-                  }}
-                >
-                  <Text style={styles.saveKeyText}>Save Key</Text>
-                </TouchableOpacity>
+                <View style={styles.keyActions}>
+                  <TouchableOpacity
+                    style={styles.testKeyButton}
+                    onPress={() => testApiKey(selectedProvider)}
+                    disabled={testingKey === selectedProvider}
+                  >
+                    {testingKey === selectedProvider ? (
+                      <ActivityIndicator color={colors.warning} size="small" />
+                    ) : (
+                      <Text style={styles.testKeyText}>Test</Text>
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.saveKeyButton}
+                    onPress={() => {
+                      saveKey(selectedProvider, apiKeys[selectedProvider]);
+                      Alert.alert('Saved', `${PROVIDERS.find((p) => p.key === selectedProvider)?.name} key saved securely`);
+                    }}
+                  >
+                    <Text style={styles.saveKeyText}>Save Key</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             </>
           )}
@@ -186,12 +270,40 @@ export function SettingsScreen() {
           </TouchableOpacity>
         </View>
 
+        {/* Legal */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Legal</Text>
+          <TouchableOpacity
+            style={styles.linkRow}
+            onPress={() => Linking.openURL('https://angelai.app/privacy')}
+          >
+            <Ionicons name="shield-checkmark-outline" size={18} color={colors.textSecondary} />
+            <Text style={styles.linkText}>Privacy Policy</Text>
+            <Ionicons name="open-outline" size={14} color={colors.textTertiary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.linkRow}
+            onPress={() => Linking.openURL('https://angelai.app/terms')}
+          >
+            <Ionicons name="document-text-outline" size={18} color={colors.textSecondary} />
+            <Text style={styles.linkText}>Terms of Service</Text>
+            <Ionicons name="open-outline" size={14} color={colors.textTertiary} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Danger Zone */}
+        <View style={styles.section}>
+          <TouchableOpacity style={styles.deleteAccountButton} onPress={handleDeleteAccount}>
+            <Ionicons name="trash-outline" size={18} color={colors.danger} />
+            <Text style={styles.deleteAccountText}>Delete Account</Text>
+          </TouchableOpacity>
+        </View>
+
         {/* App Info */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>About</Text>
-          <View style={styles.card}>
-            <Text style={styles.cardDesc}>Angel AI v2.0.0</Text>
-          </View>
+          <Text style={styles.versionText}>
+            Angel AI v{version}{buildNumber ? ` (${buildNumber})` : ''}
+          </Text>
         </View>
       </ScrollView>
     </View>
@@ -262,9 +374,23 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: fontSize.md,
   },
-  saveKeyButton: {
-    alignSelf: 'flex-end',
+  keyActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: spacing.sm,
     marginTop: spacing.sm,
+  },
+  testKeyButton: {
+    backgroundColor: colors.warning + '20',
+    borderRadius: 8,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+    minWidth: 60,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  testKeyText: { color: colors.warning, fontSize: fontSize.sm, fontWeight: '600' },
+  saveKeyButton: {
     backgroundColor: colors.primary + '20',
     borderRadius: 8,
     paddingVertical: spacing.xs,
@@ -288,4 +414,36 @@ const styles = StyleSheet.create({
     borderColor: colors.danger + '30',
   },
   logoutText: { color: colors.danger, fontSize: fontSize.md, fontWeight: '600' },
+  linkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    padding: spacing.md,
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  linkText: { color: colors.text, fontSize: fontSize.md, flex: 1 },
+  deleteAccountButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    marginHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    backgroundColor: colors.danger + '10',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.danger + '30',
+  },
+  deleteAccountText: { color: colors.danger, fontSize: fontSize.md, fontWeight: '600' },
+  versionText: {
+    color: colors.textTertiary,
+    fontSize: fontSize.sm,
+    textAlign: 'center',
+    paddingVertical: spacing.md,
+  },
 });

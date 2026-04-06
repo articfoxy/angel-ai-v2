@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { Session } from '../types';
 import { colors, spacing, fontSize } from '../theme';
@@ -7,9 +7,10 @@ import { colors, spacing, fontSize } from '../theme';
 interface SessionCardProps {
   session: Session;
   onPress: () => void;
+  onDelete?: () => void;
 }
 
-export function SessionCard({ session, onPress }: SessionCardProps) {
+export function SessionCard({ session, onPress, onDelete }: SessionCardProps) {
   const formatDuration = () => {
     if (!session.endedAt || !session.startedAt) return '--';
     const ms = new Date(session.endedAt).getTime() - new Date(session.startedAt).getTime();
@@ -30,8 +31,21 @@ export function SessionCard({ session, onPress }: SessionCardProps) {
       : JSON.stringify(session.summary)
     : null;
 
+  const handleLongPress = () => {
+    if (!onDelete) return;
+    Alert.alert('Delete Session?', 'This will permanently remove this session.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: onDelete },
+    ]);
+  };
+
   return (
-    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.7}>
+    <TouchableOpacity
+      style={styles.card}
+      onPress={onPress}
+      onLongPress={handleLongPress}
+      activeOpacity={0.7}
+    >
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Ionicons name="mic" size={16} color={colors.primary} />
@@ -44,7 +58,10 @@ export function SessionCard({ session, onPress }: SessionCardProps) {
             })}
           </Text>
         </View>
-        <Text style={styles.duration}>{formatDuration()}</Text>
+        <View style={styles.durationRow}>
+          <Ionicons name="time-outline" size={14} color={colors.textSecondary} />
+          <Text style={styles.duration}>{formatDuration()}</Text>
+        </View>
       </View>
 
       {speakerNames.length > 0 && (
@@ -92,9 +109,15 @@ const styles = StyleSheet.create({
     fontSize: fontSize.md,
     fontWeight: '600',
   },
+  durationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
   duration: {
-    color: colors.textTertiary,
-    fontSize: fontSize.sm,
+    color: colors.textSecondary,
+    fontSize: fontSize.md,
+    fontWeight: '600',
   },
   speakers: {
     flexDirection: 'row',

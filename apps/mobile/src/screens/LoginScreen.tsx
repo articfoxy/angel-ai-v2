@@ -4,8 +4,10 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   StyleSheet,
   KeyboardAvoidingView,
+  Keyboard,
   Platform,
   ActivityIndicator,
   Alert,
@@ -80,6 +82,7 @@ export function LoginScreen() {
 
   return (
     <LinearGradient colors={['#0a0a0f', '#12122a', '#0a0a0f']} style={styles.gradientBg}>
+      <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
       <KeyboardAvoidingView
         style={styles.container}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -188,6 +191,7 @@ export function LoginScreen() {
           </View>
         </View>
       </KeyboardAvoidingView>
+      </TouchableWithoutFeedback>
     </LinearGradient>
   );
 }

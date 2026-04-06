@@ -42,7 +42,7 @@ model Session {
   skills    String[]  // active skill IDs during session
   status    String    @default("active") // active | ended | processing
 
-  user     User      @relation(fields: [userId], references: [id])
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   episodes Episode[]
 
   @@index([userId])
@@ -61,8 +61,8 @@ model Episode {
   startTime DateTime
   endTime   DateTime
 
-  session Session @relation(fields: [sessionId], references: [id])
-  user    User    @relation(fields: [userId], references: [id])
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([sessionId])
   @@index([userId])
@@ -86,7 +86,7 @@ model Memory {
   category    String?   // fact, preference, opinion, event
   createdAt   DateTime  @default(now())
 
-  user User @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
 }
@@ -105,7 +105,7 @@ model Entity {
   embedding Unsupported("vector(1536)")?
   createdAt DateTime @default(now())
 
-  user          User           @relation(fields: [userId], references: [id])
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   relationsFrom Relationship[] @relation("from")
   relationsTo   Relationship[] @relation("to")
 
@@ -127,8 +127,8 @@ model Relationship {
   validTo   DateTime? // null = still valid
   source    String?   // session ID
 
-  from Entity @relation("from", fields: [fromId], references: [id])
-  to   Entity @relation("to", fields: [toId], references: [id])
+  from Entity @relation("from", fields: [fromId], references: [id], onDelete: Cascade)
+  to   Entity @relation("to", fields: [toId], references: [id], onDelete: Cascade)
 
   @@index([fromId])
   @@index([toId])
@@ -147,7 +147,7 @@ model Reflection {
   sourceMemories String[] // memory IDs that triggered this
   createdAt      DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
 }
@@ -165,7 +165,7 @@ model CoreMemory {
   activeGoals String   @default("")
   updatedAt   DateTime @updatedAt
 
-  user User @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 // ============================================
@@ -183,7 +183,7 @@ model Skill {
   downloads    Int     @default(0)
   createdAt    DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([visibility])

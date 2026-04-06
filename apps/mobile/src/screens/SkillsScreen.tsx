@@ -208,9 +208,18 @@ export function SkillsScreen() {
             publicSkills.map((skill) => renderSkillCard(skill, true))
           ) : (
             <View style={styles.emptyState}>
-              <Ionicons name="globe-outline" size={32} color={colors.textTertiary} />
+              <Ionicons name="flash-outline" size={48} color={colors.primary + '60'} />
               <Text style={styles.emptyText}>Marketplace coming soon</Text>
-              <Text style={styles.emptySubtext}>Share your skills with the community</Text>
+              <Text style={styles.emptySubtext}>
+                Create your own skills in the meantime!
+              </Text>
+              <TouchableOpacity
+                style={styles.emptyAction}
+                onPress={() => { setActiveTab('my'); setShowCreate(true); }}
+              >
+                <Ionicons name="add-circle-outline" size={18} color={colors.primary} />
+                <Text style={styles.emptyActionText}>Create a Skill</Text>
+              </TouchableOpacity>
             </View>
           )
         )}
@@ -320,4 +329,17 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: spacing.xl,
   },
+  emptyAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginTop: spacing.md,
+    backgroundColor: colors.primary + '15',
+    borderRadius: 10,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.primary + '30',
+  },
+  emptyActionText: { color: colors.primary, fontSize: fontSize.md, fontWeight: '600' },
 });

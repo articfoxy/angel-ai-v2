@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import Animated, {
@@ -214,26 +215,38 @@ export function StartScreen() {
   }, [cleanupSessionListeners]);
 
   const handleToggle = async () => {
-    if (isActive) {
-      // Stop recording first so no more audio is sent
-      await stopRecording();
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-      // Stop session
-      const socket = getSocket();
-      if (socket && sessionId) {
-        socket.emit('session:stop', { sessionId });
-      }
-      cleanupSessionListeners();
-      disconnectSocket();
-      if (timerRef.current) clearInterval(timerRef.current);
-      setIsActive(false);
-      setIsReconnecting(false);
-      setSessionId(null);
-      setSegments([]);
-      setWhisperCards([]);
-      setSpeakerNames({});
-      setElapsed(0);
-      refetchSessions();
+    if (isActive) {
+      // Show confirmation before stopping
+      Alert.alert('End Session?', 'This will stop recording and process your conversation.', [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'End Session',
+          style: 'destructive',
+          onPress: async () => {
+            // Stop recording first so no more audio is sent
+            await stopRecording();
+
+            // Stop session
+            const socket = getSocket();
+            if (socket && sessionId) {
+              socket.emit('session:stop', { sessionId });
+            }
+            cleanupSessionListeners();
+            disconnectSocket();
+            if (timerRef.current) clearInterval(timerRef.current);
+            setIsActive(false);
+            setIsReconnecting(false);
+            setSessionId(null);
+            setSegments([]);
+            setWhisperCards([]);
+            setSpeakerNames({});
+            setElapsed(0);
+            refetchSessions();
+          },
+        },
+      ]);
     } else {
       // Start session
       try {
@@ -349,6 +362,15 @@ export function StartScreen() {
                   key={session.id}
                   session={session}
                   onPress={() => navigation.navigate('Debrief', { sessionId: session.id })}
+                  onDelete={async () => {
+                    try {
+                      await api.delete(`sessions/${session.id}`);
+                      refetchSessions();
+                    } catch (err) {
+                      console.error('Failed to delete session:', err);
+                      Alert.alert('Error', 'Failed to delete session. Please try again.');
+                    }
+                  }}
                 />
               ))
             ) : (

@@ -1,5 +1,5 @@
 import React, { useRef, useEffect } from 'react';
-import { View, Text, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert, Clipboard } from 'react-native';
 import type { TranscriptSegment } from '../types';
 import { colors, spacing, fontSize } from '../theme';
 
@@ -48,9 +48,17 @@ export function TranscriptView({ segments, speakerNames }: TranscriptViewProps) 
             <Text style={[styles.speakerName, { color: getSpeakerColor(segment.speaker) }]}>
               {getSpeakerLabel(segment.speaker)}
             </Text>
-            <Text style={[styles.text, !segment.isFinal && styles.textInterim]}>
-              {segment.text}
-            </Text>
+            <TouchableOpacity
+              activeOpacity={0.7}
+              onLongPress={() => {
+                Clipboard.setString(segment.text);
+                Alert.alert('Copied', 'Text copied to clipboard');
+              }}
+            >
+              <Text style={[styles.text, !segment.isFinal && styles.textInterim]}>
+                {segment.text}
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
       ))}
