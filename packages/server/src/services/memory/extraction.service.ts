@@ -1,0 +1,288 @@
+import OpenAI from 'openai';
+import { prisma } from '../../index';
+import { RetrievalService } from './retrieval.service';
+
+interface ExtractedFact {
+  content: string;
+  category: string;
+  importance: number;
+  entities: Array<{ name: string; type: string }>;
+  relationships: Array<{ from: string; to: string; type: string }>;
+}
+
+export class ExtractionService {
+  private openai: OpenAI;
+  private retrieval: RetrievalService;
+
+  constructor(apiKey?: string) {
+    this.openai = new OpenAI({ apiKey: apiKey || process.env.OPENAI_API_KEY });
+    this.retrieval = new RetrievalService(apiKey);
+  }
+
+  async processSession(sessionId: string, userId: string): Promise<any> {
+    // 1. Get all episodes from session
+    const episodes = await prisma.episode.findMany({
+      where: { sessionId },
+      orderBy: { startTime: 'asc' },
+    });
+
+    if (episodes.length === 0) return { summary: 'No transcript available' };
+
+    // Build full transcript
+    const transcript = episodes
+      .map((ep) => `[${ep.speaker}]: ${ep.content}`)
+      .join('\n');
+
+    // 2. Extract facts, entities, relationships via LLM
+    const extraction = await this.extractFacts(transcript);
+
+    // 3. Reconcile with existing memories (Mem0-style ADD/UPDATE/DELETE/NOOP)
+    await this.reconcileMemories(userId, extraction.facts, sessionId);
+
+    // 4. Extract/update entities
+    await this.reconcileEntities(userId, extraction.entities);
+
+    // 5. Create relationships
+    await this.createRelationships(userId, extraction.relationships, sessionId);
+
+    // 6. Update core memory if significant
+    await this.updateCoreMemory(userId, extraction.coreUpdates);
+
+    // 7. Generate session summary
+    const summary = await this.generateSummary(transcript);
+
+    return summary;
+  }
+
+  private async extractFacts(transcript: string): Promise<{
+    facts: ExtractedFact[];
+    entities: Array<{ name: string; type: string; aliases?: string[] }>;
+    relationships: Array<{ from: string; to: string; type: string }>;
+    coreUpdates: Record<string, string>;
+  }> {
+    const response = await this.openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `You are a memory extraction engine. Analyze the conversation transcript and extract:
+
+1. **facts**: Key facts, decisions, preferences, events mentioned. Each with:
+   - content: the fact as a concise statement
+   - category: one of "fact", "preference", "opinion", "event", "decision", "commitment"
+   - importance: 1-10 scale
+   - entities: people, orgs, topics mentioned in this fact
+   - relationships: connections between entities
+
+2. **entities**: People, organizations, places, topics mentioned. Each with:
+   - name: primary name
+   - type: "person", "org", "place", "topic"
+   - aliases: alternative names used
+
+3. **relationships**: Connections between entities. Each with:
+   - from: entity name
+   - to: entity name
+   - type: "works_with", "discussed", "friend_of", "reports_to", "interested_in", etc.
+
+4. **coreUpdates**: If the conversation reveals important information about the user (the "Owner" speaker), provide updates as:
+   - userProfile: new info about the user
+   - preferences: new preferences discovered
+   - keyPeople: important people mentioned
+   - activeGoals: goals or objectives mentioned
+
+Return valid JSON only.`,
+        },
+        { role: 'user', content: transcript },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.3,
+    });
+
+    try {
+      return JSON.parse(response.choices[0].message.content || '{}');
+    } catch {
+      return { facts: [], entities: [], relationships: [], coreUpdates: {} };
+    }
+  }
+
+  private async reconcileMemories(userId: string, facts: ExtractedFact[], sessionId: string) {
+    for (const fact of facts) {
+      // Check for existing similar memories
+      try {
+        const embedding = await this.retrieval.getEmbedding(fact.content);
+        const vectorStr = `[${embedding.join(',')}]`;
+
+        const similar = await prisma.$queryRawUnsafe<any[]>(
+          `SELECT id, content, embedding <=> $1::vector AS distance
+           FROM "Memory"
+           WHERE "userId" = $2 AND "validTo" IS NULL AND embedding IS NOT NULL
+           ORDER BY distance ASC
+           LIMIT 1`,
+          vectorStr,
+          userId
+        );
+
+        if (similar.length > 0 && similar[0].distance < 0.15) {
+          // Very similar — UPDATE existing memory
+          await prisma.memory.update({
+            where: { id: similar[0].id },
+            data: { content: fact.content, importance: fact.importance },
+          });
+        } else {
+          // New fact — ADD
+          await prisma.$executeRawUnsafe(
+            `INSERT INTO "Memory" (id, "userId", content, embedding, importance, category, source, "validFrom", "createdAt", "accessCount")
+             VALUES ($1, $2, $3, $4::vector, $5, $6, $7, NOW(), NOW(), 0)`,
+            crypto.randomUUID(),
+            userId,
+            fact.content,
+            vectorStr,
+            fact.importance,
+            fact.category,
+            sessionId
+          );
+        }
+      } catch (err) {
+        // Fallback: insert without embedding
+        await prisma.memory.create({
+          data: {
+            userId,
+            content: fact.content,
+            importance: fact.importance,
+            category: fact.category,
+            source: sessionId,
+          },
+        });
+      }
+    }
+  }
+
+  private async reconcileEntities(
+    userId: string,
+    entities: Array<{ name: string; type: string; aliases?: string[] }>
+  ) {
+    for (const entity of entities) {
+      // Check if entity already exists (by name or alias)
+      const existing = await prisma.entity.findFirst({
+        where: {
+          userId,
+          OR: [
+            { name: entity.name },
+            { aliases: { has: entity.name } },
+          ],
+        },
+      });
+
+      if (existing) {
+        // Merge aliases
+        const newAliases = new Set([
+          ...existing.aliases,
+          ...(entity.aliases || []),
+          entity.name,
+        ]);
+        newAliases.delete(existing.name);
+
+        await prisma.entity.update({
+          where: { id: existing.id },
+          data: { aliases: Array.from(newAliases) },
+        });
+      } else {
+        await prisma.entity.create({
+          data: {
+            userId,
+            name: entity.name,
+            type: entity.type,
+            aliases: entity.aliases || [],
+          },
+        });
+      }
+    }
+  }
+
+  private async createRelationships(
+    userId: string,
+    relationships: Array<{ from: string; to: string; type: string }>,
+    sessionId: string
+  ) {
+    for (const rel of relationships) {
+      const fromEntity = await prisma.entity.findFirst({
+        where: { userId, OR: [{ name: rel.from }, { aliases: { has: rel.from } }] },
+      });
+      const toEntity = await prisma.entity.findFirst({
+        where: { userId, OR: [{ name: rel.to }, { aliases: { has: rel.to } }] },
+      });
+
+      if (fromEntity && toEntity) {
+        // Check for existing relationship
+        const existing = await prisma.relationship.findFirst({
+          where: { fromId: fromEntity.id, toId: toEntity.id, type: rel.type, validTo: null },
+        });
+
+        if (existing) {
+          // Strengthen weight
+          await prisma.relationship.update({
+            where: { id: existing.id },
+            data: { weight: { increment: 0.1 } },
+          });
+        } else {
+          await prisma.relationship.create({
+            data: {
+              fromId: fromEntity.id,
+              toId: toEntity.id,
+              type: rel.type,
+              source: sessionId,
+            },
+          });
+        }
+      }
+    }
+  }
+
+  private async updateCoreMemory(userId: string, updates: Record<string, string>) {
+    if (!updates || Object.keys(updates).length === 0) return;
+
+    const core = await prisma.coreMemory.findUnique({ where: { userId } });
+    if (!core) return;
+
+    const data: Record<string, string> = {};
+    for (const [field, value] of Object.entries(updates)) {
+      if (value && ['userProfile', 'preferences', 'keyPeople', 'activeGoals'].includes(field)) {
+        // Append to existing rather than replace
+        const existing = (core as any)[field] || '';
+        if (!existing.includes(value)) {
+          data[field] = existing ? `${existing}\n${value}` : value;
+        }
+      }
+    }
+
+    if (Object.keys(data).length > 0) {
+      await prisma.coreMemory.update({ where: { userId }, data });
+    }
+  }
+
+  private async generateSummary(transcript: string): Promise<any> {
+    const response = await this.openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `Summarize this conversation concisely. Include:
+- Brief summary (2-3 sentences)
+- Key decisions made
+- Action items identified
+- Important topics discussed
+Return as JSON with fields: summary, decisions, actionItems, topics`,
+        },
+        { role: 'user', content: transcript },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.3,
+    });
+
+    try {
+      return JSON.parse(response.choices[0].message.content || '{}');
+    } catch {
+      return { summary: 'Session completed' };
+    }
+  }
+}

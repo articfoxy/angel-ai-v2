@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "Angel AI",
+    "slug": "angel-ai-v2",
+    "version": "1.0.0",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "scheme": "angelai",
+    "owner": "articfoxy",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.angelai.v2",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Angel AI needs microphone access to provide real-time conversation intelligence.",
+        "UIBackgroundModes": ["audio"],
+        "NSBluetoothAlwaysUsageDescription": "Angel AI uses Bluetooth to connect to your AirPods for hands-free conversation intelligence.",
+        "NSBluetoothPeripheralUsageDescription": "Angel AI uses Bluetooth to connect to your AirPods for hands-free conversation intelligence.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0a0f"
+    },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Angel AI needs microphone access to provide real-time conversation intelligence."
+        }
+      ],
+      "expo-apple-authentication"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": ""
+      }
+    }
+  }
+}

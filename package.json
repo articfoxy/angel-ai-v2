@@ -1,0 +1,9 @@
+{
+  "name": "angel-ai-v2",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
+}

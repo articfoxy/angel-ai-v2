@@ -1,0 +1,123 @@
+import { Router, Response } from 'express';
+import { prisma } from '../index';
+import { AuthRequest } from '../middleware/auth';
+
+export const skillsRouter = Router();
+
+// My skills
+skillsRouter.get('/mine', async (req: AuthRequest, res: Response) => {
+  try {
+    const skills = await prisma.skill.findMany({
+      where: { userId: req.userId },
+      orderBy: { createdAt: 'desc' },
+    });
+    res.json({ success: true, data: skills });
+  } catch {
+    res.status(500).json({ error: 'Failed to fetch skills' });
+  }
+});
+
+// Public skills (marketplace)
+skillsRouter.get('/public', async (req: AuthRequest, res: Response) => {
+  try {
+    const skills = await prisma.skill.findMany({
+      where: { visibility: 'public' },
+      orderBy: { downloads: 'desc' },
+      take: 50,
+    });
+    res.json({ success: true, data: skills });
+  } catch {
+    res.status(500).json({ error: 'Failed to fetch public skills' });
+  }
+});
+
+// Get single skill (public access for sharing)
+skillsRouter.get('/:id', async (req: AuthRequest, res: Response) => {
+  try {
+    const skill = await prisma.skill.findUnique({ where: { id: req.params.id } });
+    if (!skill) {
+      res.status(404).json({ error: 'Skill not found' });
+      return;
+    }
+    if (skill.visibility !== 'public' && skill.userId !== req.userId) {
+      res.status(403).json({ error: 'Access denied' });
+      return;
+    }
+    res.json({ success: true, data: skill });
+  } catch {
+    res.status(500).json({ error: 'Failed to fetch skill' });
+  }
+});
+
+// Create skill
+skillsRouter.post('/', async (req: AuthRequest, res: Response) => {
+  try {
+    const { name, trigger, systemPrompt, description, outputSchema, visibility } = req.body;
+
+    // If description provided, generate skill config via LLM (future)
+    // For now, require name + systemPrompt directly
+    if (!name && !description) {
+      res.status(400).json({ error: 'Name or description required' });
+      return;
+    }
+
+    const skill = await prisma.skill.create({
+      data: {
+        userId: req.userId!,
+        name: name || 'Custom Skill',
+        trigger: trigger || null,
+        systemPrompt: systemPrompt || description || '',
+        outputSchema: outputSchema || null,
+        visibility: visibility || 'private',
+      },
+    });
+
+    res.json({ success: true, data: skill });
+  } catch {
+    res.status(500).json({ error: 'Failed to create skill' });
+  }
+});
+
+// Import skill (copy from another user)
+skillsRouter.post('/:id/import', async (req: AuthRequest, res: Response) => {
+  try {
+    const source = await prisma.skill.findUnique({ where: { id: req.params.id } });
+    if (!source || source.visibility !== 'public') {
+      res.status(404).json({ error: 'Skill not found or not public' });
+      return;
+    }
+
+    const imported = await prisma.skill.create({
+      data: {
+        userId: req.userId!,
+        name: source.name,
+        trigger: source.trigger,
+        systemPrompt: source.systemPrompt,
+        outputSchema: source.outputSchema,
+        visibility: 'private',
+      },
+    });
+
+    // Increment download count on source
+    await prisma.skill.update({
+      where: { id: source.id },
+      data: { downloads: { increment: 1 } },
+    });
+
+    res.json({ success: true, data: imported });
+  } catch {
+    res.status(500).json({ error: 'Failed to import skill' });
+  }
+});
+
+// Delete skill
+skillsRouter.delete('/:id', async (req: AuthRequest, res: Response) => {
+  try {
+    await prisma.skill.deleteMany({
+      where: { id: req.params.id, userId: req.userId },
+    });
+    res.json({ success: true });
+  } catch {
+    res.status(500).json({ error: 'Failed to delete skill' });
+  }
+});

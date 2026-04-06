@@ -1,0 +1,76 @@
+import { Router, Response } from 'express';
+import { prisma } from '../index';
+import { AuthRequest } from '../middleware/auth';
+
+export const sessionsRouter = Router();
+
+// List sessions
+sessionsRouter.get('/', async (req: AuthRequest, res: Response) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 20;
+    const sessions = await prisma.session.findMany({
+      where: { userId: req.userId },
+      orderBy: { startedAt: 'desc' },
+      take: limit,
+    });
+
+    const total = await prisma.session.count({ where: { userId: req.userId } });
+    res.json({ success: true, data: { sessions, total } });
+  } catch {
+    res.status(500).json({ error: 'Failed to fetch sessions' });
+  }
+});
+
+// Get single session
+sessionsRouter.get('/:id', async (req: AuthRequest, res: Response) => {
+  try {
+    const session = await prisma.session.findFirst({
+      where: { id: req.params.id, userId: req.userId },
+      include: { episodes: { orderBy: { startTime: 'asc' } } },
+    });
+
+    if (!session) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
+    res.json({ success: true, data: session });
+  } catch {
+    res.status(500).json({ error: 'Failed to fetch session' });
+  }
+});
+
+// Create session
+sessionsRouter.post('/', async (req: AuthRequest, res: Response) => {
+  try {
+    const session = await prisma.session.create({
+      data: {
+        userId: req.userId!,
+        skills: req.body.skills || [],
+      },
+    });
+
+    res.json({ success: true, data: session });
+  } catch {
+    res.status(500).json({ error: 'Failed to create session' });
+  }
+});
+
+// End session
+sessionsRouter.patch('/:id/end', async (req: AuthRequest, res: Response) => {
+  try {
+    const session = await prisma.session.update({
+      where: { id: req.params.id },
+      data: {
+        endedAt: new Date(),
+        status: 'ended',
+        summary: req.body.summary || undefined,
+        speakers: req.body.speakers || undefined,
+      },
+    });
+
+    res.json({ success: true, data: session });
+  } catch {
+    res.status(500).json({ error: 'Failed to end session' });
+  }
+});
