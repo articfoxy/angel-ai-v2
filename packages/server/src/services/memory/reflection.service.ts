@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 import { prisma } from '../../index';
 import { RetrievalService } from './retrieval.service';
 
-const REFLECTION_IMPORTANCE_THRESHOLD = 30; // cumulative importance before triggering reflection
+const REFLECTION_IMPORTANCE_THRESHOLD = 15; // cumulative importance before triggering reflection
 
 export class ReflectionService {
   private openai: OpenAI;
@@ -138,4 +138,14 @@ Return JSON: { "reflections": [{ "content": "...", "importance": 7, "sourceMemor
       data: { validTo: new Date() },
     });
   }
+}
+
+/**
+ * Convenience function to run reflection + maintenance at session end.
+ * Call this from the session end handler after extraction completes.
+ */
+export async function runPostSessionReflection(userId: string): Promise<void> {
+  const service = new ReflectionService();
+  await service.maybeReflect(userId);
+  await service.maintain(userId);
 }

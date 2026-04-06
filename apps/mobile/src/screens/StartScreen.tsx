@@ -6,8 +6,10 @@ import {
   StyleSheet,
   RefreshControl,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -24,12 +26,14 @@ import { SessionCard } from '../components/SessionCard';
 import { useAuth } from '../hooks/useAuth';
 import { useApi } from '../hooks/useApi';
 import { connectSocket, disconnectSocket, getSocket } from '../services/socket';
+import { requestMicPermission, startRecording, stopRecording } from '../services/audio';
 import { api } from '../services/api';
 import { colors, spacing, fontSize } from '../theme';
 import type { Session, SessionsListResponse, TranscriptSegment, WhisperCardData } from '../types';
 
 export function StartScreen() {
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation<any>();
   const { user } = useAuth();
   const [isActive, setIsActive] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -78,8 +82,18 @@ export function StartScreen() {
     return `${m}:${s}`;
   };
 
+  // Clean up recording on unmount (e.g. if user navigates away while active)
+  useEffect(() => {
+    return () => {
+      stopRecording().catch(() => {});
+    };
+  }, []);
+
   const handleToggle = async () => {
     if (isActive) {
+      // Stop recording first so no more audio is sent
+      await stopRecording();
+
       // Stop session
       const socket = getSocket();
       if (socket && sessionId) {
@@ -97,6 +111,17 @@ export function StartScreen() {
     } else {
       // Start session
       try {
+        // Request microphone permission before anything else
+        const hasPermission = await requestMicPermission();
+        if (!hasPermission) {
+          Alert.alert(
+            'Microphone Required',
+            'Angel AI needs microphone access to listen to your conversations. Please enable it in Settings.',
+            [{ text: 'OK' }]
+          );
+          return;
+        }
+
         const session = await api.post<Session>('sessions', {});
         setSessionId(session.id);
         setIsActive(true);
@@ -108,6 +133,14 @@ export function StartScreen() {
 
         const socket = await connectSocket();
         socket.emit('session:start', { sessionId: session.id });
+
+        // Start audio recording and stream chunks to the server
+        await startRecording((audioBase64: string) => {
+          const currentSocket = getSocket();
+          if (currentSocket?.connected) {
+            currentSocket.emit('audio', audioBase64);
+          }
+        });
 
         socket.on('transcript', (data: TranscriptSegment) => {
           setSegments((prev) => {
@@ -128,8 +161,24 @@ export function StartScreen() {
         socket.on('speaker:identified', (data: { speakerId: string; label: string }) => {
           setSpeakerNames((prev) => ({ ...prev, [data.speakerId]: data.label }));
         });
+
+        socket.on('session:debrief', (data: { sessionId: string }) => {
+          // Session ended server-side, navigate to debrief
+          stopRecording().catch(() => {});
+          if (timerRef.current) clearInterval(timerRef.current);
+          setIsActive(false);
+          setSessionId(null);
+          setSegments([]);
+          setWhisperCards([]);
+          setSpeakerNames({});
+          setElapsed(0);
+          disconnectSocket();
+          refetchSessions();
+          navigation.navigate('Debrief', { sessionId: data.sessionId });
+        });
       } catch (err) {
         console.error('Failed to start session:', err);
+        await stopRecording();
         setIsActive(false);
       }
     }
@@ -194,7 +243,7 @@ export function StartScreen() {
                 <SessionCard
                   key={session.id}
                   session={session}
-                  onPress={() => {/* TODO: navigate to debrief */}}
+                  onPress={() => navigation.navigate('Debrief', { sessionId: session.id })}
                 />
               ))
             ) : (

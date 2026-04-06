@@ -37,16 +37,32 @@ export class ExtractionService {
     const extraction = await this.extractFacts(transcript);
 
     // 3. Reconcile with existing memories (Mem0-style ADD/UPDATE/DELETE/NOOP)
-    await this.reconcileMemories(userId, extraction.facts, sessionId);
+    try {
+      await this.reconcileMemories(userId, extraction.facts, sessionId);
+    } catch (err) {
+      console.error('Memory reconciliation error:', err);
+    }
 
     // 4. Extract/update entities
-    await this.reconcileEntities(userId, extraction.entities);
+    try {
+      await this.reconcileEntities(userId, extraction.entities);
+    } catch (err) {
+      console.error('Entity reconciliation error:', err);
+    }
 
     // 5. Create relationships
-    await this.createRelationships(userId, extraction.relationships, sessionId);
+    try {
+      await this.createRelationships(userId, extraction.relationships, sessionId);
+    } catch (err) {
+      console.error('Relationship creation error:', err);
+    }
 
     // 6. Update core memory if significant
-    await this.updateCoreMemory(userId, extraction.coreUpdates);
+    try {
+      await this.updateCoreMemory(userId, extraction.coreUpdates);
+    } catch (err) {
+      console.error('Core memory update error:', err);
+    }
 
     // 7. Generate session summary
     const summary = await this.generateSummary(transcript);
@@ -113,7 +129,7 @@ Return valid JSON only.`,
         const vectorStr = `[${embedding.join(',')}]`;
 
         const similar = await prisma.$queryRawUnsafe<any[]>(
-          `SELECT id, content, embedding <=> $1::vector AS distance
+          `SELECT id, content, importance, embedding <=> $1::vector AS distance
            FROM "Memory"
            WHERE "userId" = $2 AND "validTo" IS NULL AND embedding IS NOT NULL
            ORDER BY distance ASC
@@ -123,11 +139,27 @@ Return valid JSON only.`,
         );
 
         if (similar.length > 0 && similar[0].distance < 0.15) {
-          // Very similar — UPDATE existing memory
-          await prisma.memory.update({
-            where: { id: similar[0].id },
-            data: { content: fact.content, importance: fact.importance },
-          });
+          // Very similar — UPDATE existing memory: merge content instead of overwriting
+          const existingContent: string = similar[0].content;
+          let mergedContent: string;
+          if (existingContent === fact.content) {
+            mergedContent = existingContent;
+          } else if (fact.content.toLowerCase().includes(existingContent.toLowerCase())) {
+            // New content subsumes old — use the new, more complete version
+            mergedContent = fact.content;
+          } else {
+            // Append new info, noting if it differs
+            mergedContent = `${existingContent} [updated: ${fact.content}]`;
+          }
+
+          // Refresh the embedding since content changed
+          await prisma.$executeRawUnsafe(
+            `UPDATE "Memory" SET content = $1, importance = $2, embedding = $3::vector WHERE id = $4`,
+            mergedContent,
+            Math.max(fact.importance, similar[0].importance ?? 0),
+            vectorStr,
+            similar[0].id
+          );
         } else {
           // New fact — ADD
           await prisma.$executeRawUnsafe(
@@ -174,7 +206,8 @@ Return valid JSON only.`,
       });
 
       if (existing) {
-        // Merge aliases
+        // Merge aliases, cap at 10 (drop oldest/first entries if over limit)
+        const MAX_ALIASES = 10;
         const newAliases = new Set([
           ...existing.aliases,
           ...(entity.aliases || []),
@@ -182,9 +215,14 @@ Return valid JSON only.`,
         ]);
         newAliases.delete(existing.name);
 
+        let aliasArray = Array.from(newAliases);
+        if (aliasArray.length > MAX_ALIASES) {
+          aliasArray = aliasArray.slice(aliasArray.length - MAX_ALIASES);
+        }
+
         await prisma.entity.update({
           where: { id: existing.id },
-          data: { aliases: Array.from(newAliases) },
+          data: { aliases: aliasArray },
         });
       } else {
         await prisma.entity.create({

@@ -22,6 +22,7 @@ export class DeepgramService {
   private speakerMap: Map<number, string> = new Map();
   private speakerCounts: Map<number, number> = new Map();
   private ownerIdentified = false;
+  private sessionStartTime: number = 0;
 
   constructor(config: DeepgramConfig) {
     this.config = config;
@@ -42,6 +43,9 @@ export class DeepgramService {
       utterance_end_ms: 1000,
       vad_events: true,
     });
+
+    // Store session start timestamp when connection is established
+    this.sessionStartTime = Date.now();
 
     this.connection.on(LiveTranscriptionEvents.Open, () => {
       console.log(`Deepgram connected for session ${this.config.sessionId}`);
@@ -83,14 +87,18 @@ export class DeepgramService {
 
       // Store final segments as episodes
       if (isFinal && transcript.transcript.trim()) {
+        // data.start = seconds offset from stream start; data.duration = segment duration in seconds
+        const startTime = new Date(this.sessionStartTime + (data.start ?? 0) * 1000);
+        const endTime = new Date(this.sessionStartTime + ((data.start ?? 0) + (data.duration ?? 0)) * 1000);
+
         prisma.episode.create({
           data: {
             sessionId: this.config.sessionId,
             userId: this.config.userId,
             speaker: speakerLabel || `speaker_${speaker ?? 'unknown'}`,
             content: transcript.transcript,
-            startTime: new Date(data.start * 1000 + Date.now() - data.duration * 1000),
-            endTime: new Date(),
+            startTime,
+            endTime,
           },
         }).catch((err: Error) => console.error('Episode save error:', err));
       }

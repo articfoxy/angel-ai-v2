@@ -13,7 +13,7 @@ const TYPE_CONFIG: Record<string, { icon: keyof typeof Ionicons.glyphMap; gradie
   insight: { icon: 'bulb', gradient: ['#6366f1', '#8b5cf6'] },
   action: { icon: 'checkmark-circle', gradient: ['#22c55e', '#16a34a'] },
   warning: { icon: 'alert-circle', gradient: ['#f59e0b', '#d97706'] },
-  memory: { icon: 'brain', gradient: ['#06b6d4', '#0891b2'] },
+  memory: { icon: 'server', gradient: ['#06b6d4', '#0891b2'] },
   default: { icon: 'sparkles', gradient: ['#6366f1', '#8b5cf6'] },
 };
 

@@ -46,6 +46,15 @@ export class InferenceService {
     config?: InferenceConfig,
     activeSkills?: string[]
   ): Promise<WhisperResult | null> {
+    const provider = config?.provider || 'openai';
+    const apiKey = config?.apiKey || process.env.OPENAI_API_KEY || '';
+
+    // Early API key validation
+    if (!apiKey) {
+      console.warn(`[InferenceService] No API key available for provider "${provider}", skipping whisper generation`);
+      return null;
+    }
+
     // Build context from memory system
     const memoryContext = await this.retrieval.buildContext(userId, recentTranscript);
 
@@ -64,61 +73,74 @@ export class InferenceService {
       }
     }
 
-    const messages = [
-      { role: 'system' as const, content: GENERALIST_SYSTEM_PROMPT },
-      {
-        role: 'user' as const,
-        content: `${memoryContext}${skillsContext}\n## Recent Transcript\n${recentTranscript}\n\nBased on this conversation, generate a whisper insight if appropriate. Return JSON: { "type": "insight|action|warning|memory", "content": "...", "detail": "optional detail", "confidence": 0.0-1.0 } or { "skip": true } if nothing useful to say.`,
-      },
-    ];
-
-    const provider = config?.provider || 'openai';
-    const apiKey = config?.apiKey || process.env.OPENAI_API_KEY || '';
+    const systemPrompt = GENERALIST_SYSTEM_PROMPT;
+    const userContent = `${memoryContext}${skillsContext}\n## Recent Transcript\n${recentTranscript}\n\nBased on this conversation, generate a whisper insight if appropriate. Return JSON: { "type": "insight|action|warning|memory", "content": "...", "detail": "optional detail", "confidence": 0.0-1.0 } or { "skip": true } if nothing useful to say.`;
 
     let result: string;
 
-    if (provider === 'openai') {
-      const client = new OpenAI({ apiKey });
-      const response = await client.chat.completions.create({
-        model: config?.model || 'gpt-4o-mini',
-        messages,
-        response_format: { type: 'json_object' },
-        temperature: 0.5,
-        max_tokens: 200,
-      });
-      result = response.choices[0].message.content || '{}';
-    } else if (provider === 'anthropic') {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model: config?.model || 'claude-sonnet-4-6',
-          max_tokens: 200,
+    try {
+      if (provider === 'openai') {
+        const client = new OpenAI({ apiKey });
+        const response = await client.chat.completions.create({
+          model: config?.model || 'gpt-4o-mini',
           messages: [
-            { role: 'user', content: `${messages[0].content}\n\n${messages[1].content}` },
+            { role: 'system' as const, content: systemPrompt },
+            { role: 'user' as const, content: userContent },
           ],
-        }),
-      });
-      const data = await response.json() as any;
-      result = data.content?.[0]?.text || '{}';
-    } else if (provider === 'google') {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1/models/${config?.model || 'gemini-pro'}:generateContent?key=${apiKey}`,
-        {
+          response_format: { type: 'json_object' },
+          temperature: 0.5,
+          max_tokens: 300,
+        });
+        result = response.choices[0].message.content || '{}';
+      } else if (provider === 'anthropic') {
+        const response = await fetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': apiKey,
+            'anthropic-version': '2023-06-01',
+          },
           body: JSON.stringify({
-            contents: [{ parts: [{ text: `${messages[0].content}\n\n${messages[1].content}` }] }],
+            model: config?.model || 'claude-sonnet-4-20250514',
+            max_tokens: 300,
+            system: systemPrompt,
+            messages: [
+              { role: 'user', content: userContent },
+            ],
           }),
+        });
+        if (!response.ok) {
+          const errorBody = await response.text();
+          console.error(`[InferenceService] Anthropic API error ${response.status}: ${errorBody}`);
+          return null;
         }
-      );
-      const data = await response.json() as any;
-      result = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-    } else {
+        const data = (await response.json()) as any;
+        result = data.content?.[0]?.text || '{}';
+      } else if (provider === 'google') {
+        const model = config?.model || 'gemini-2.0-flash';
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: `${systemPrompt}\n\n${userContent}` }] }],
+              generationConfig: { maxOutputTokens: 300 },
+            }),
+          }
+        );
+        if (!response.ok) {
+          const errorBody = await response.text();
+          console.error(`[InferenceService] Google Gemini API error ${response.status}: ${errorBody}`);
+          return null;
+        }
+        const data = (await response.json()) as any;
+        result = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+      } else {
+        return null;
+      }
+    } catch (err) {
+      console.error(`[InferenceService] ${provider} request failed:`, err);
       return null;
     }
 

@@ -51,7 +51,7 @@ export function MainTabs() {
         component={MemoryScreen}
         options={{
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="brain" size={size} color={color} />
+            <Ionicons name="cube" size={size} color={color} />
           ),
         }}
       />

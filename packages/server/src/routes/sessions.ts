@@ -59,8 +59,17 @@ sessionsRouter.post('/', async (req: AuthRequest, res: Response) => {
 // End session
 sessionsRouter.patch('/:id/end', async (req: AuthRequest, res: Response) => {
   try {
+    // Verify the session belongs to the authenticated user
+    const existing = await prisma.session.findFirst({
+      where: { id: String(req.params.id), userId: String(req.userId) },
+    });
+    if (!existing) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+
     const session = await prisma.session.update({
-      where: { id: String(req.params.id) },
+      where: { id: existing.id },
       data: {
         endedAt: new Date(),
         status: 'ended',
