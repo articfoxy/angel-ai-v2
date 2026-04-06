@@ -317,12 +317,20 @@ export function StartScreen() {
             currentSocket.emit('audio', audioBase64);
           }
         });
-      } catch (err) {
+      } catch (err: any) {
         console.error('Failed to start session:', err);
         await stopRecording();
         cleanupSessionListeners();
+        disconnectSocket();
+        if (timerRef.current) clearInterval(timerRef.current);
         setIsActive(false);
         setIsReconnecting(false);
+        setSessionId(null);
+        setElapsed(0);
+        Alert.alert(
+          'Connection Failed',
+          err?.message || 'Could not start session. Please check your connection and try again.'
+        );
       }
     }
   };

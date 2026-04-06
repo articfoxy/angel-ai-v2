@@ -22,6 +22,8 @@ export function onSocketStateChange(callback: StateChangeCallback): () => void {
   };
 }
 
+const CONNECT_TIMEOUT_MS = 8000;
+
 export async function connectSocket(): Promise<Socket> {
   const token = await getStoredToken();
   if (!token) throw new Error('Not authenticated');
@@ -34,7 +36,7 @@ export async function connectSocket(): Promise<Socket> {
     socket = null;
   }
 
-  socket = io(WS_URL, {
+  const newSocket = io(WS_URL, {
     auth: async (cb) => {
       const currentToken = await getStoredToken();
       cb({ token: currentToken });
@@ -44,6 +46,27 @@ export async function connectSocket(): Promise<Socket> {
     reconnectionDelay: 1000,
     reconnectionAttempts: 10,
   });
+
+  // Wait for the socket to actually connect before returning.
+  // This prevents audio from being emitted to an unconnected socket.
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      newSocket.disconnect();
+      reject(new Error('Socket connection timed out'));
+    }, CONNECT_TIMEOUT_MS);
+
+    newSocket.once('connect', () => {
+      clearTimeout(timeout);
+      resolve();
+    });
+
+    newSocket.once('connect_error', (err) => {
+      clearTimeout(timeout);
+      reject(new Error(`Socket connection failed: ${err.message}`));
+    });
+  });
+
+  socket = newSocket;
 
   socket.on('connect', () => {
     console.log('[socket] connected, id:', socket?.id);
@@ -73,6 +96,7 @@ export async function connectSocket(): Promise<Socket> {
     console.log('[socket] reconnect attempt', attemptNumber);
   });
 
+  console.log('[socket] connected successfully, id:', socket.id);
   return socket;
 }
 

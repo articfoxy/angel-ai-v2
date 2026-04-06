@@ -35,7 +35,13 @@ export class DeepgramService {
   }
 
   async connect(): Promise<void> {
-    const deepgram = createClient(process.env.DEEPGRAM_API_KEY || '');
+    const apiKey = process.env.DEEPGRAM_API_KEY || '';
+    if (!apiKey) {
+      console.error('[Deepgram] DEEPGRAM_API_KEY is not set! Transcription will fail.');
+    } else {
+      console.log(`[Deepgram] Connecting with API key: ${apiKey.substring(0, 8)}...`);
+    }
+    const deepgram = createClient(apiKey);
 
     this.connection = deepgram.listen.live({
       model: 'nova-3',
