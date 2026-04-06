@@ -82,10 +82,12 @@ export function StartScreen() {
     return `${m}:${s}`;
   };
 
-  // Clean up recording on unmount (e.g. if user navigates away while active)
+  // Clean up recording AND socket on unmount (e.g. if user navigates away while active)
   useEffect(() => {
     return () => {
       stopRecording().catch(() => {});
+      disconnectSocket();
+      if (timerRef.current) clearInterval(timerRef.current);
     };
   }, []);
 
@@ -175,6 +177,21 @@ export function StartScreen() {
           disconnectSocket();
           refetchSessions();
           navigation.navigate('Debrief', { sessionId: data.sessionId });
+        });
+
+        socket.on('session:timeout', (data: { reason: string; message: string }) => {
+          // Server timed out the session
+          stopRecording().catch(() => {});
+          if (timerRef.current) clearInterval(timerRef.current);
+          setIsActive(false);
+          setSessionId(null);
+          setSegments([]);
+          setWhisperCards([]);
+          setSpeakerNames({});
+          setElapsed(0);
+          disconnectSocket();
+          refetchSessions();
+          Alert.alert('Session Ended', data.message || 'Session timed out');
         });
       } catch (err) {
         console.error('Failed to start session:', err);

@@ -85,13 +85,20 @@ export async function startRecording(
       await recording.prepareToRecordAsync(recordingOptions);
       await recording.startAsync();
 
-      // Read the completed chunk and send it
+      // Read the completed chunk, strip WAV header, and send raw PCM
       if (uri) {
         const base64 = await readAsStringAsync(uri, {
           encoding: EncodingType.Base64,
         });
         if (base64 && base64.length > 0) {
-          onAudioData(base64);
+          // Each chunk is a complete WAV file with a 44-byte header.
+          // Deepgram expects continuous raw PCM — strip the header.
+          // 44 bytes = ceil(44 * 4/3) = 60 base64 chars (with padding)
+          const WAV_HEADER_BASE64_LEN = 60;
+          const rawPcm = base64.length > WAV_HEADER_BASE64_LEN
+            ? base64.substring(WAV_HEADER_BASE64_LEN)
+            : base64;
+          onAudioData(rawPcm);
         }
         // Clean up the temp file
         await deleteAsync(uri, { idempotent: true }).catch(() => {});

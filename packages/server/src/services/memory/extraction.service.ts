@@ -19,14 +19,23 @@ export class ExtractionService {
     this.retrieval = new RetrievalService(apiKey);
   }
 
-  async processSession(sessionId: string, userId: string): Promise<any> {
+  async processSession(sessionId: string, userId: string): Promise<{
+    summary: string;
+    memoriesExtracted: number;
+    entitiesFound: number;
+    duration: number | null;
+  }> {
+    const startTime = Date.now();
+
     // 1. Get all episodes from session
     const episodes = await prisma.episode.findMany({
       where: { sessionId },
       orderBy: { startTime: 'asc' },
     });
 
-    if (episodes.length === 0) return { summary: 'No transcript available' };
+    if (episodes.length === 0) {
+      return { summary: 'No transcript available', memoriesExtracted: 0, entitiesFound: 0, duration: 0 };
+    }
 
     // Build full transcript
     const transcript = episodes
@@ -37,15 +46,19 @@ export class ExtractionService {
     const extraction = await this.extractFacts(transcript);
 
     // 3. Reconcile with existing memories (Mem0-style ADD/UPDATE/DELETE/NOOP)
+    let memoriesExtracted = 0;
     try {
       await this.reconcileMemories(userId, extraction.facts, sessionId);
+      memoriesExtracted = extraction.facts.length;
     } catch (err) {
       console.error('Memory reconciliation error:', err);
     }
 
     // 4. Extract/update entities
+    let entitiesFound = 0;
     try {
       await this.reconcileEntities(userId, extraction.entities);
+      entitiesFound = extraction.entities.length;
     } catch (err) {
       console.error('Entity reconciliation error:', err);
     }
@@ -65,9 +78,11 @@ export class ExtractionService {
     }
 
     // 7. Generate session summary
-    const summary = await this.generateSummary(transcript);
+    const summaryResult = await this.generateSummary(transcript);
+    const summary = typeof summaryResult === 'object' ? summaryResult.summary || 'Session completed' : String(summaryResult);
+    const duration = Math.round((Date.now() - startTime) / 1000);
 
-    return summary;
+    return { summary, memoriesExtracted, entitiesFound, duration };
   }
 
   private async extractFacts(transcript: string): Promise<{

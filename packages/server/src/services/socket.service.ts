@@ -169,15 +169,23 @@ export function setupSocketHandlers(io: Server) {
       console.log(`Session started: ${sessionId}`);
     });
 
-    socket.on('audio', (audioData: Buffer) => {
+    socket.on('audio', (audioData: string | Buffer) => {
       if (deepgram) {
-        deepgram.sendAudio(audioData);
+        // Mobile sends base64-encoded raw PCM; decode to Buffer for Deepgram
+        const buffer = typeof audioData === 'string'
+          ? Buffer.from(audioData, 'base64')
+          : audioData;
+        deepgram.sendAudio(buffer);
       }
     });
 
     socket.on('session:stop', async ({ sessionId }: { sessionId: string }) => {
       // Clean up timers and Deepgram
       clearAllTimers();
+
+      // Grab speakers before closing Deepgram
+      const speakers = deepgram ? deepgram.getSpeakers() : {};
+
       if (deepgram) {
         deepgram.close();
         deepgram = null;
@@ -186,16 +194,14 @@ export function setupSocketHandlers(io: Server) {
       if (socket.userId) {
         await prisma.session.update({
           where: { id: sessionId },
-          data: { endedAt: new Date(), status: 'processing' },
+          data: { endedAt: new Date(), status: 'processing', speakers },
         });
 
         // Post-session: extract memories, entities, reflections
         const userId = socket.userId;
         const extraction = new ExtractionService();
         extraction.processSession(sessionId, userId).then(async (extractionResult) => {
-          const summary = typeof extractionResult === 'string'
-            ? extractionResult
-            : extractionResult?.summary || 'Session completed';
+          const summary = extractionResult?.summary || 'Session completed';
 
           await prisma.session.update({
             where: { id: sessionId },

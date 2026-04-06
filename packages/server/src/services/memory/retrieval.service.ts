@@ -34,9 +34,9 @@ export class RetrievalService {
   private openai: OpenAI;
 
   constructor(apiKey?: string) {
-    const key = apiKey || process.env.OPENAI_API_KEY;
+    const key = apiKey || process.env.OPENAI_API_KEY || '';
     if (!key) {
-      throw new Error('OpenAI API key is required — set OPENAI_API_KEY or pass apiKey to constructor');
+      console.warn('[RetrievalService] No OpenAI API key set — vector search and embeddings will be unavailable');
     }
     this.openai = new OpenAI({ apiKey: key });
   }

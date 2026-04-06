@@ -106,6 +106,8 @@ export class DeepgramService {
 
     this.connection.on(LiveTranscriptionEvents.Error, (err: any) => {
       console.error('Deepgram error:', err);
+      // Close the broken connection to prevent hanging state
+      this.close();
     });
   }
 
@@ -141,6 +143,14 @@ export class DeepgramService {
   private getSpeakerLabel(speaker?: number): string | undefined {
     if (speaker === undefined) return undefined;
     return this.speakerMap.get(speaker) || `Speaker ${speaker}`;
+  }
+
+  getSpeakers(): Record<string, string> {
+    const speakers: Record<string, string> = {};
+    this.speakerMap.forEach((label, speaker) => {
+      speakers[`speaker_${speaker}`] = label;
+    });
+    return speakers;
   }
 
   sendAudio(data: Buffer) {
