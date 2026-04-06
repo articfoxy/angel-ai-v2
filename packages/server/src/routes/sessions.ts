@@ -25,7 +25,7 @@ sessionsRouter.get('/', async (req: AuthRequest, res: Response) => {
 sessionsRouter.get('/:id', async (req: AuthRequest, res: Response) => {
   try {
     const session = await prisma.session.findFirst({
-      where: { id: req.params.id, userId: req.userId },
+      where: { id: String(req.params.id), userId: String(req.userId) },
       include: { episodes: { orderBy: { startTime: 'asc' } } },
     });
 
@@ -60,12 +60,12 @@ sessionsRouter.post('/', async (req: AuthRequest, res: Response) => {
 sessionsRouter.patch('/:id/end', async (req: AuthRequest, res: Response) => {
   try {
     const session = await prisma.session.update({
-      where: { id: req.params.id },
+      where: { id: String(req.params.id) },
       data: {
         endedAt: new Date(),
         status: 'ended',
-        summary: req.body.summary || undefined,
-        speakers: req.body.speakers || undefined,
+        summary: req.body.summary ?? undefined,
+        speakers: req.body.speakers ?? undefined,
       },
     });
 

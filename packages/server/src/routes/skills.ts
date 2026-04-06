@@ -1,4 +1,5 @@
 import { Router, Response } from 'express';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../index';
 import { AuthRequest } from '../middleware/auth';
 
@@ -8,7 +9,7 @@ export const skillsRouter = Router();
 skillsRouter.get('/mine', async (req: AuthRequest, res: Response) => {
   try {
     const skills = await prisma.skill.findMany({
-      where: { userId: req.userId },
+      where: { userId: req.userId as string },
       orderBy: { createdAt: 'desc' },
     });
     res.json({ success: true, data: skills });
@@ -18,7 +19,7 @@ skillsRouter.get('/mine', async (req: AuthRequest, res: Response) => {
 });
 
 // Public skills (marketplace)
-skillsRouter.get('/public', async (req: AuthRequest, res: Response) => {
+skillsRouter.get('/public', async (_req: AuthRequest, res: Response) => {
   try {
     const skills = await prisma.skill.findMany({
       where: { visibility: 'public' },
@@ -34,7 +35,7 @@ skillsRouter.get('/public', async (req: AuthRequest, res: Response) => {
 // Get single skill (public access for sharing)
 skillsRouter.get('/:id', async (req: AuthRequest, res: Response) => {
   try {
-    const skill = await prisma.skill.findUnique({ where: { id: req.params.id } });
+    const skill = await prisma.skill.findUnique({ where: { id: req.params.id as string } });
     if (!skill) {
       res.status(404).json({ error: 'Skill not found' });
       return;
@@ -54,8 +55,6 @@ skillsRouter.post('/', async (req: AuthRequest, res: Response) => {
   try {
     const { name, trigger, systemPrompt, description, outputSchema, visibility } = req.body;
 
-    // If description provided, generate skill config via LLM (future)
-    // For now, require name + systemPrompt directly
     if (!name && !description) {
       res.status(400).json({ error: 'Name or description required' });
       return;
@@ -67,7 +66,7 @@ skillsRouter.post('/', async (req: AuthRequest, res: Response) => {
         name: name || 'Custom Skill',
         trigger: trigger || null,
         systemPrompt: systemPrompt || description || '',
-        outputSchema: outputSchema || null,
+        outputSchema: outputSchema ? (outputSchema as Prisma.InputJsonValue) : Prisma.JsonNull,
         visibility: visibility || 'private',
       },
     });
@@ -81,7 +80,7 @@ skillsRouter.post('/', async (req: AuthRequest, res: Response) => {
 // Import skill (copy from another user)
 skillsRouter.post('/:id/import', async (req: AuthRequest, res: Response) => {
   try {
-    const source = await prisma.skill.findUnique({ where: { id: req.params.id } });
+    const source = await prisma.skill.findUnique({ where: { id: req.params.id as string } });
     if (!source || source.visibility !== 'public') {
       res.status(404).json({ error: 'Skill not found or not public' });
       return;
@@ -93,12 +92,11 @@ skillsRouter.post('/:id/import', async (req: AuthRequest, res: Response) => {
         name: source.name,
         trigger: source.trigger,
         systemPrompt: source.systemPrompt,
-        outputSchema: source.outputSchema,
+        outputSchema: source.outputSchema ? (source.outputSchema as Prisma.InputJsonValue) : Prisma.JsonNull,
         visibility: 'private',
       },
     });
 
-    // Increment download count on source
     await prisma.skill.update({
       where: { id: source.id },
       data: { downloads: { increment: 1 } },
@@ -114,7 +112,7 @@ skillsRouter.post('/:id/import', async (req: AuthRequest, res: Response) => {
 skillsRouter.delete('/:id', async (req: AuthRequest, res: Response) => {
   try {
     await prisma.skill.deleteMany({
-      where: { id: req.params.id, userId: req.userId },
+      where: { id: req.params.id as string, userId: req.userId as string },
     });
     res.json({ success: true });
   } catch {

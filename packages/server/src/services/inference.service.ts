@@ -88,7 +88,6 @@ export class InferenceService {
       });
       result = response.choices[0].message.content || '{}';
     } else if (provider === 'anthropic') {
-      // Anthropic API call
       const response = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
         headers: {
@@ -104,10 +103,9 @@ export class InferenceService {
           ],
         }),
       });
-      const data = await response.json();
+      const data = await response.json() as any;
       result = data.content?.[0]?.text || '{}';
     } else if (provider === 'google') {
-      // Google Gemini API call
       const response = await fetch(
         `https://generativelanguage.googleapis.com/v1/models/${config?.model || 'gemini-pro'}:generateContent?key=${apiKey}`,
         {
@@ -118,7 +116,7 @@ export class InferenceService {
           }),
         }
       );
-      const data = await response.json();
+      const data = await response.json() as any;
       result = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
     } else {
       return null;
