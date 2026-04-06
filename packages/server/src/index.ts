@@ -30,6 +30,20 @@ app.use(express.json());
 // Health check
 app.get('/health', (_, res) => res.json({ status: 'ok', version: '2.0.0' }));
 
+// Debug endpoint — check env vars and test Deepgram connection
+app.get('/debug/env', (_, res) => {
+  const dgKey = process.env.DEEPGRAM_API_KEY || '';
+  const oaiKey = process.env.OPENAI_API_KEY || '';
+  res.json({
+    deepgram: dgKey ? `set (${dgKey.substring(0, 8)}...)` : 'MISSING',
+    openai: oaiKey ? `set (${oaiKey.substring(0, 8)}...)` : 'MISSING',
+    jwt_secret: process.env.JWT_SECRET ? 'set' : 'MISSING',
+    database_url: process.env.DATABASE_URL ? 'set' : 'MISSING',
+    node_env: process.env.NODE_ENV || 'unset',
+    port: process.env.PORT || '3000',
+  });
+});
+
 // Auth routes (no auth middleware)
 app.use('/api/auth', authRouter);
 
