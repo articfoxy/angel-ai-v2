@@ -94,10 +94,10 @@ export function TranscriptView({ segments, speakerNames }: TranscriptViewProps) 
   );
 
   useEffect(() => {
-    // Small delay to ensure layout is complete before scrolling
+    // Minimal delay (~1 frame) to ensure layout is complete before scrolling
     const timer = setTimeout(() => {
       scrollRef.current?.scrollToEnd({ animated: true });
-    }, 50);
+    }, 16);
     return () => clearTimeout(timer);
   }, [groups.length, segments.length]);
 

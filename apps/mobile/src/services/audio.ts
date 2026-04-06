@@ -10,8 +10,8 @@ let recording: Audio.Recording | null = null;
 let pollingInterval: ReturnType<typeof setInterval> | null = null;
 let processing = false;
 
-/** Interval between chunk cycles (ms). 500ms balances chunk size vs latency. */
-const CHUNK_INTERVAL_MS = 500;
+/** Interval between chunk cycles (ms). 250ms for low-latency live transcription. */
+const CHUNK_INTERVAL_MS = 250;
 
 const RECORDING_OPTIONS: Audio.RecordingOptions = {
   isMeteringEnabled: false,

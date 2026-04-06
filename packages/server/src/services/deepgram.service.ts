@@ -52,8 +52,10 @@ export class DeepgramService {
       sample_rate: 16000,
       channels: 1,
       interim_results: true,
-      utterance_end_ms: 1000,
+      utterance_end_ms: 500,
+      endpointing: 300,
       vad_events: true,
+      no_delay: true,
     });
 
     // Wait for the connection to actually open before returning.
