@@ -91,7 +91,7 @@ app.get('/debug/realtime', authenticateToken, async (_, res) => {
 });
 
 // Debug endpoint — test Deepgram connectivity with various parameter combos
-app.get('/debug/deepgram', async (_, res) => {
+app.get('/debug/deepgram', authenticateToken, async (_, res) => {
   const { createClient, LiveTranscriptionEvents } = await import('@deepgram/sdk');
   const key = process.env.DEEPGRAM_API_KEY || '';
   if (!key) return res.json({ status: 'error', message: 'No DEEPGRAM_API_KEY' });
