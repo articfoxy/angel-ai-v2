@@ -23,14 +23,17 @@ interface RealtimeConfig {
   instructions: string;
   onWhisper: (whisper: RealtimeWhisper) => void;
   onError?: (error: string) => void;
-  onStatus?: (status: 'connected' | 'reconnecting' | 'disconnected') => void;
+  onStatus?: (status: 'connected' | 'reconnecting' | 'disconnected' | 'error') => void;
 }
 
-const REALTIME_URL = 'wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview';
+// Use the full model — mini may not support text-only realtime well
+const REALTIME_URL = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview';
 const RECONNECT_DELAY_MS = 2000;
 const MAX_RECONNECT_ATTEMPTS = 5;
 // Trigger a response after this many new transcript lines
 const TRANSCRIPT_TRIGGER_THRESHOLD = 3;
+// Safety timeout to unstick responseInProgress if response.done never arrives
+const RESPONSE_TIMEOUT_MS = 15000;
 
 export class RealtimeService {
   private ws: WebSocket | null = null;
@@ -41,14 +44,25 @@ export class RealtimeService {
   private linesSinceLastResponse = 0;
   private responseInProgress = false;
   private currentResponseText = '';
+  private responseTimeout: ReturnType<typeof setTimeout> | null = null;
+  private sessionConfigured = false;
 
   constructor(config: RealtimeConfig) {
     this.config = config;
   }
 
+  /** Whether the Realtime session is connected and configured */
+  get isConnected(): boolean {
+    return this.ws?.readyState === WebSocket.OPEN && this.sessionConfigured;
+  }
+
   async connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.sessionActive = true;
+      this.sessionConfigured = false;
+
+      console.log('[Realtime] Connecting to:', REALTIME_URL);
+      console.log('[Realtime] API key prefix:', this.config.apiKey.substring(0, 12) + '...');
 
       this.ws = new WebSocket(REALTIME_URL, {
         headers: {
@@ -59,6 +73,7 @@ export class RealtimeService {
 
       const timeout = setTimeout(() => {
         if (this.ws?.readyState !== WebSocket.OPEN) {
+          console.error('[Realtime] Connection timeout after 10s');
           this.ws?.close();
           reject(new Error('Realtime connection timeout'));
         }
@@ -66,7 +81,7 @@ export class RealtimeService {
 
       this.ws.on('open', () => {
         clearTimeout(timeout);
-        console.log('[Realtime] Connected to OpenAI Realtime API');
+        console.log('[Realtime] WebSocket OPEN — configuring session...');
         this.configureSession();
         this.config.onStatus?.('connected');
         resolve();
@@ -85,10 +100,12 @@ export class RealtimeService {
         clearTimeout(timeout);
         console.error('[Realtime] WebSocket error:', err.message);
         this.config.onError?.(err.message);
+        this.config.onStatus?.('error');
       });
 
       this.ws.on('close', (code, reason) => {
         console.log(`[Realtime] Connection closed: ${code} ${reason}`);
+        this.sessionConfigured = false;
         if (this.sessionActive && !this.reconnecting) {
           this.config.onStatus?.('reconnecting');
           this.attemptReconnect();
@@ -101,6 +118,7 @@ export class RealtimeService {
    * Configure the Realtime session with user instructions and tools.
    */
   private configureSession(): void {
+    console.log('[Realtime] Sending session.update with instructions length:', this.config.instructions.length);
     this.send({
       type: 'session.update',
       session: {
@@ -170,6 +188,7 @@ export class RealtimeService {
 
     // Auto-trigger response after threshold
     if (this.linesSinceLastResponse >= TRANSCRIPT_TRIGGER_THRESHOLD && !this.responseInProgress) {
+      console.log(`[Realtime] Triggering auto-response after ${this.linesSinceLastResponse} lines`);
       this.requestResponse();
     }
   }
@@ -183,6 +202,7 @@ export class RealtimeService {
     this.responseInProgress = true;
     this.linesSinceLastResponse = 0;
     this.currentResponseText = '';
+    this.startResponseTimeout();
 
     this.send({
       type: 'response.create',
@@ -197,17 +217,22 @@ export class RealtimeService {
    * Force an immediate response (angel:activate).
    */
   forceRespond(): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn('[Realtime] forceRespond called but WS not open');
+      return;
+    }
 
     // Cancel any in-progress response
     if (this.responseInProgress) {
       this.send({ type: 'response.cancel' });
       this.responseInProgress = false;
+      this.clearResponseTimeout();
     }
 
     this.currentResponseText = '';
     this.responseInProgress = true;
     this.linesSinceLastResponse = 0;
+    this.startResponseTimeout();
 
     this.send({
       type: 'response.create',
@@ -232,6 +257,27 @@ export class RealtimeService {
   }
 
   /**
+   * Safety timeout: if response.done never arrives, unstick responseInProgress.
+   */
+  private startResponseTimeout(): void {
+    this.clearResponseTimeout();
+    this.responseTimeout = setTimeout(() => {
+      if (this.responseInProgress) {
+        console.warn('[Realtime] Response timeout — unsticking responseInProgress');
+        this.responseInProgress = false;
+        this.currentResponseText = '';
+      }
+    }, RESPONSE_TIMEOUT_MS);
+  }
+
+  private clearResponseTimeout(): void {
+    if (this.responseTimeout) {
+      clearTimeout(this.responseTimeout);
+      this.responseTimeout = null;
+    }
+  }
+
+  /**
    * Handle incoming events from the Realtime API.
    */
   private handleEvent(event: any): void {
@@ -247,7 +293,12 @@ export class RealtimeService {
         break;
 
       case 'session.updated':
-        console.log('[Realtime] Session updated');
+        console.log('[Realtime] Session configured successfully');
+        this.sessionConfigured = true;
+        break;
+
+      case 'response.created':
+        console.log('[Realtime] Response started');
         break;
 
       case 'response.text.delta':
@@ -255,16 +306,21 @@ export class RealtimeService {
         break;
 
       case 'response.text.done':
+        console.log('[Realtime] Response text complete, length:', (event.text || this.currentResponseText).length);
         this.currentResponseText = event.text || this.currentResponseText;
         break;
 
       case 'response.function_call_arguments.done':
         // Function call completed — handle it
+        console.log('[Realtime] Function call:', event.name, 'call_id:', event.call_id);
         this.handleFunctionCall(event.name, event.arguments, event.call_id);
         break;
 
       case 'response.done':
+        this.clearResponseTimeout();
         this.responseInProgress = false;
+        console.log('[Realtime] Response done. Text length:', this.currentResponseText.length,
+          'Status:', event.response?.status, 'Output items:', event.response?.output?.length || 0);
         if (this.currentResponseText) {
           this.parseAndEmitWhisper(this.currentResponseText);
           this.currentResponseText = '';
@@ -272,7 +328,8 @@ export class RealtimeService {
         break;
 
       case 'error':
-        console.error('[Realtime] API error:', event.error);
+        console.error('[Realtime] API error:', JSON.stringify(event.error));
+        this.clearResponseTimeout();
         this.responseInProgress = false;
         this.config.onError?.(event.error?.message || 'Realtime API error');
         break;
@@ -282,10 +339,8 @@ export class RealtimeService {
         break;
 
       default:
-        // Log unexpected events for debugging
-        if (!event.type?.startsWith('response.') && !event.type?.startsWith('conversation.')) {
-          console.log(`[Realtime] Unhandled event: ${event.type}`);
-        }
+        // Log ALL events for debugging until we're stable
+        console.log(`[Realtime] Event: ${event.type}`);
     }
   }
 
@@ -325,14 +380,22 @@ export class RealtimeService {
    * Parse model text output as a whisper JSON and emit it.
    */
   private parseAndEmitWhisper(text: string): void {
+    console.log('[Realtime] Parsing whisper from:', text.substring(0, 100));
     try {
       // Extract JSON from potential markdown code blocks
       const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) return;
+      if (!jsonMatch) {
+        console.warn('[Realtime] No JSON found in response text');
+        return;
+      }
 
       const parsed = JSON.parse(jsonMatch[0]);
-      if (parsed.skip) return;
+      if (parsed.skip) {
+        console.log('[Realtime] Model returned skip');
+        return;
+      }
 
+      console.log('[Realtime] Emitting whisper:', parsed.type, parsed.content?.substring(0, 50));
       this.config.onWhisper({
         type: parsed.type || 'insight',
         content: parsed.content || '',
@@ -344,6 +407,7 @@ export class RealtimeService {
     } catch {
       // Not valid JSON — might be a plain text response
       if (text.trim() && !text.includes('"skip"')) {
+        console.log('[Realtime] Emitting plain text whisper');
         this.config.onWhisper({
           type: 'response',
           content: text.trim().slice(0, 200),
@@ -355,6 +419,8 @@ export class RealtimeService {
   private send(event: Record<string, unknown>): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(event));
+    } else {
+      console.warn('[Realtime] Tried to send but WS not open:', event.type);
     }
   }
 
@@ -385,9 +451,11 @@ export class RealtimeService {
 
   async close(): Promise<void> {
     this.sessionActive = false;
+    this.sessionConfigured = false;
     this.pendingTranscript = [];
     this.linesSinceLastResponse = 0;
     this.responseInProgress = false;
+    this.clearResponseTimeout();
 
     if (this.ws) {
       this.ws.close();

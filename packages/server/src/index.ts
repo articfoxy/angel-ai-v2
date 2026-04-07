@@ -45,6 +45,53 @@ app.get('/debug/env', (_, res) => {
   });
 });
 
+// Debug endpoint — test OpenAI Realtime API connectivity
+app.get('/debug/realtime', async (_, res) => {
+  const WebSocket = (await import('ws')).default;
+  const key = process.env.OPENAI_API_KEY || '';
+  if (!key) return res.json({ status: 'error', message: 'No OPENAI_API_KEY' });
+
+  const url = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview';
+  const events: string[] = [];
+
+  try {
+    const ws = new WebSocket(url, {
+      headers: { 'Authorization': `Bearer ${key}`, 'OpenAI-Beta': 'realtime=v1' },
+    });
+
+    const result = await new Promise<any>((resolve) => {
+      const timeout = setTimeout(() => {
+        ws.close();
+        resolve({ status: 'timeout', events });
+      }, 8000);
+
+      ws.on('open', () => events.push('ws:open'));
+      ws.on('message', (data: any) => {
+        const evt = JSON.parse(data.toString());
+        events.push(evt.type + (evt.error ? `: ${JSON.stringify(evt.error)}` : ''));
+        if (evt.type === 'session.created') {
+          clearTimeout(timeout);
+          ws.close();
+          resolve({ status: 'ok', sessionId: evt.session?.id, events });
+        }
+        if (evt.type === 'error') {
+          clearTimeout(timeout);
+          ws.close();
+          resolve({ status: 'error', error: evt.error, events });
+        }
+      });
+      ws.on('error', (err: any) => {
+        clearTimeout(timeout);
+        resolve({ status: 'ws_error', message: err.message, events });
+      });
+    });
+
+    res.json(result);
+  } catch (err: any) {
+    res.json({ status: 'exception', message: err.message });
+  }
+});
+
 // Auth routes (no auth middleware)
 app.use('/api/auth', authRouter);
 

@@ -182,6 +182,7 @@ export function setupSocketHandlers(io: Server) {
           },
           onStatus: (status) => {
             console.log(`[Realtime] Status: ${status}`);
+            socket.emit('realtime:status', { status });
           },
         });
 
