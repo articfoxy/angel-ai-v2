@@ -13,6 +13,10 @@ const TYPE_CONFIG: Record<
   string,
   { icon: keyof typeof Ionicons.glyphMap; color: string; bg: string; label: string }
 > = {
+  definition: { icon: 'book-outline', color: '#a78bfa', bg: 'rgba(167, 139, 250, 0.12)', label: 'Definition' },
+  response: { icon: 'chatbubble-outline', color: '#7c7fff', bg: colors.primaryMuted, label: 'Angel' },
+  memory_saved: { icon: 'checkmark-circle-outline', color: '#34d399', bg: colors.successMuted, label: 'Saved' },
+  search: { icon: 'search-outline', color: '#f472b6', bg: 'rgba(244, 114, 182, 0.12)', label: 'Search' },
   insight: { icon: 'bulb-outline', color: '#7c7fff', bg: colors.primaryMuted, label: 'Insight' },
   action: { icon: 'arrow-forward-circle-outline', color: '#34d399', bg: colors.successMuted, label: 'Action' },
   warning: { icon: 'warning-outline', color: '#fbbf24', bg: colors.warningMuted, label: 'Heads Up' },

@@ -12,26 +12,56 @@ interface WhisperResult {
   content: string;
   detail?: string;
   confidence?: number;
+  /** If set, the server should execute this action before emitting the whisper */
+  action?: 'save_memory' | 'web_search';
+  actionData?: Record<string, unknown>;
 }
 
-const GENERALIST_SYSTEM_PROMPT = `You are Angel, a personal AI companion listening to a live conversation through the user's AirPods. You provide real-time insights, suggestions, and coaching.
+const GENERALIST_SYSTEM_PROMPT = `You are Angel, a personal AI companion listening to a live conversation through the user's AirPods. You provide real-time, proactive help AND respond to the owner's commands.
 
-You are a generalist — you adapt to whatever the conversation needs:
-- In meetings: note key decisions, flag action items, surface relevant context
-- In sales calls: identify objections, suggest responses, track commitments
-- In learning sessions: clarify concepts, connect to prior knowledge, suggest follow-ups
-- In brainstorming: challenge assumptions, suggest alternatives, capture ideas
-- In coaching: provide encouragement, track progress, suggest improvements
+## OWNER COMMANDS (highest priority — respond IMMEDIATELY)
 
-You never need to be told what "mode" to use — you observe and respond appropriately.
+The owner (labeled [Owner] in transcript) can talk to you directly. Detect these patterns:
 
-Your responses should be:
-- Concise (1-2 sentences max for real-time whispers)
-- Actionable (tell the user something they can use RIGHT NOW)
-- Contextual (use their memory and history to personalize)
-- Non-intrusive (don't state the obvious)
+1. **"Angel, remember..."** / **"Save this..."** / **"Note that..."** — The owner wants you to save something to memory.
+   Return: { "type": "memory_saved", "content": "Saved: <what you're saving>", "action": "save_memory", "actionData": { "content": "<fact to save>", "importance": 7, "category": "fact" } }
 
-Only generate a whisper when you have something genuinely useful to say. It's better to stay silent than to state the obvious.`;
+2. **"Angel, search for..."** / **"Look up..."** / **"Google..."** — The owner wants you to search for something.
+   Return: { "type": "search", "content": "Searching: <query>", "action": "web_search", "actionData": { "query": "<search query>" } }
+
+3. **"Angel, what is..."** / **"Angel, explain..."** / **"Hey Angel..."** / Any direct question to Angel — The owner is asking you directly.
+   Return: { "type": "response", "content": "<your concise answer>", "detail": "<optional extra context>" }
+   Answer from your knowledge. Be concise but helpful.
+
+4. **"Angel, who is..."** / **"Tell me about..."** — Knowledge questions.
+   Return: { "type": "response", "content": "<answer>" }
+
+The owner doesn't always say "Angel" — if the most recent [Owner] line is clearly a question or command directed at the AI (not to other people in the room), treat it as a command.
+
+## PASSIVE BEHAVIORS (when no command detected)
+
+5. **JARGON & TERM DETECTION** — When ANYONE uses technical terms, acronyms, industry jargon, slang, or specialized vocabulary that the owner may not know, explain it.
+   - Business: "ARR", "burn rate", "cap table", "LTV:CAC", "Series A"
+   - Tech: "kubernetes", "microservices", "latency", "API gateway"
+   - Legal: "indemnification", "force majeure", "fiduciary duty"
+   - Medical, Finance, any field: acronyms, abbreviations, foreign phrases
+   Use type "definition" for these.
+
+6. **KEY INSIGHTS** — Hidden implications, contradictions, things that affect the owner. Use type "insight".
+
+7. **ACTION ITEMS** — When someone commits to something or asks the owner to do something. Use type "action".
+
+8. **WARNINGS** — Red flags, inconsistencies, caution needed. Use type "warning".
+
+## RULES
+- Owner commands ALWAYS take priority over passive behaviors
+- Be FAST and CONCISE — max 1-2 sentences for content, optional 1 sentence for detail
+- For memory saves, extract the core fact clearly (remove filler words)
+- For search requests, formulate a good search query from the owner's words
+- For direct questions, answer confidently and concisely
+- Focus on what the owner DOESN'T already know
+- If nothing genuinely useful AND no command detected, return skip
+- Never repeat something you already whispered about`;
 
 export class InferenceService {
   private retrieval: RetrievalService;
@@ -44,7 +74,8 @@ export class InferenceService {
     userId: string,
     recentTranscript: string,
     config?: InferenceConfig,
-    activeSkills?: string[]
+    activeSkills?: string[],
+    recentWhispers?: string[]
   ): Promise<WhisperResult | null> {
     const provider = config?.provider || 'openai';
     const apiKey = config?.apiKey || process.env.OPENAI_API_KEY || '';
@@ -74,7 +105,10 @@ export class InferenceService {
     }
 
     const systemPrompt = GENERALIST_SYSTEM_PROMPT;
-    const userContent = `${memoryContext}${skillsContext}\n## Recent Transcript\n${recentTranscript}\n\nBased on this conversation, generate a whisper insight if appropriate. Return JSON: { "type": "insight|action|warning|memory", "content": "...", "detail": "optional detail", "confidence": 0.0-1.0 } or { "skip": true } if nothing useful to say.`;
+    const alreadyWhispered = recentWhispers && recentWhispers.length > 0
+      ? `\n## Already Whispered (DO NOT repeat these)\n${recentWhispers.map(w => `- ${w}`).join('\n')}\n`
+      : '';
+    const userContent = `${memoryContext}${skillsContext}${alreadyWhispered}\n## Recent Transcript\n${recentTranscript}\n\nAnalyze the transcript above. FIRST check if the owner is giving you a command or asking you a question. If so, respond to it. Otherwise, look for jargon, insights, action items, or warnings.\n\nReturn ONE JSON object:\n- Command response: { "type": "memory_saved|search|response", "content": "...", "action": "save_memory|web_search", "actionData": {...}, "confidence": 0.9 }\n- Passive whisper: { "type": "definition|insight|action|warning", "content": "...", "detail": "optional", "confidence": 0.8 }\n- Nothing useful: { "skip": true }\n\nFor definitions: "TERM — explanation".\nFor memory saves: include actionData with { "content": "fact to save", "importance": 1-10, "category": "fact|preference|person|event" }.\nFor searches: include actionData with { "query": "search terms" }.\nFor direct answers (type "response"): just answer concisely, no action needed.`;
 
     let result: string;
 
@@ -88,8 +122,8 @@ export class InferenceService {
             { role: 'user' as const, content: userContent },
           ],
           response_format: { type: 'json_object' },
-          temperature: 0.5,
-          max_tokens: 300,
+          temperature: 0.3,
+          max_tokens: 200,
         });
         result = response.choices[0].message.content || '{}';
       } else if (provider === 'anthropic') {
@@ -102,7 +136,7 @@ export class InferenceService {
           },
           body: JSON.stringify({
             model: config?.model || 'claude-sonnet-4-20250514',
-            max_tokens: 300,
+            max_tokens: 200,
             system: systemPrompt,
             messages: [
               { role: 'user', content: userContent },
@@ -125,7 +159,7 @@ export class InferenceService {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               contents: [{ parts: [{ text: `${systemPrompt}\n\n${userContent}` }] }],
-              generationConfig: { maxOutputTokens: 300 },
+              generationConfig: { maxOutputTokens: 200, temperature: 0.3 },
             }),
           }
         );
@@ -147,12 +181,18 @@ export class InferenceService {
     try {
       const parsed = JSON.parse(result);
       if (parsed.skip) return null;
-      return {
+      const whisper: WhisperResult = {
         type: parsed.type || 'insight',
         content: parsed.content || '',
         detail: parsed.detail,
         confidence: parsed.confidence,
       };
+      // Attach action data if the LLM returned a command
+      if (parsed.action) {
+        whisper.action = parsed.action;
+        whisper.actionData = parsed.actionData;
+      }
+      return whisper;
     } catch {
       return null;
     }

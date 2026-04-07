@@ -25,7 +25,6 @@ import Animated, {
 import { Ionicons } from '@expo/vector-icons';
 import { AngelButton } from '../components/AngelButton';
 import { TranscriptView } from '../components/TranscriptView';
-import { WhisperCard } from '../components/WhisperCard';
 import { SessionCard } from '../components/SessionCard';
 import { useAuth } from '../hooks/useAuth';
 import { useApi } from '../hooks/useApi';
@@ -426,17 +425,12 @@ export function StartScreen() {
       {isActive ? (
         /* Active Session View */
         <View style={styles.activeContainer}>
-          {/* Whisper Cards */}
-          {whisperCards.length > 0 && (
-            <View style={styles.whisperSection}>
-              {whisperCards.slice(0, 3).map((card) => (
-                <WhisperCard key={card.id} card={card} />
-              ))}
-            </View>
-          )}
-
-          {/* Live Transcript */}
-          <TranscriptView segments={segments} speakerNames={speakerNames} />
+          {/* Live Transcript with inline whisper cards */}
+          <TranscriptView
+            segments={segments}
+            speakerNames={speakerNames}
+            whisperCards={whisperCards}
+          />
 
           {/* Bottom control bar */}
           <View style={styles.activeButtonRow}>
@@ -592,7 +586,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   activeContainer: { flex: 1 },
-  whisperSection: { marginBottom: spacing.sm, marginTop: spacing.xs },
   activeButtonRow: {
     paddingVertical: spacing.sm,
     borderTopWidth: 1,

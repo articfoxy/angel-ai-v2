@@ -4,11 +4,12 @@ import { v4 as uuid } from 'uuid';
 import { prisma } from '../index';
 import { DeepgramService } from './deepgram.service';
 import { InferenceService } from './inference.service';
+import { SearchService } from './search.service';
 import { ExtractionService } from './memory/extraction.service';
 import { runPostSessionReflection } from './memory/reflection.service';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
-const WHISPER_INTERVAL_MS = 15000; // Generate whisper every 15s
+const WHISPER_INTERVAL_MS = 10000; // Generate whisper every 10s
 const MAX_SESSION_DURATION_MS = 7_200_000; // 2 hours
 const IDLE_TIMEOUT_MS = 300_000; // 5 minutes with no new transcript
 
@@ -24,6 +25,7 @@ interface InferenceConfig {
 
 export function setupSocketHandlers(io: Server) {
   const inference = new InferenceService();
+  const search = new SearchService();
 
   // Auth middleware
   io.use(async (socket: AuthenticatedSocket, next) => {
@@ -77,11 +79,12 @@ export function setupSocketHandlers(io: Server) {
     }
 
     let byokConfig: InferenceConfig | undefined;
+    let recentWhisperContents: string[] = []; // Track last 10 whispers to avoid duplicates
 
     function startWhisperTimer(userId: string, sessionSkills: string[]) {
       if (whisperTimer) return; // Already running
       whisperTimer = setInterval(async () => {
-        if (transcriptBuffer.length < 3) return; // Need some transcript first
+        if (transcriptBuffer.length < 2) return; // Need some transcript first
 
         const recentTranscript = transcriptBuffer.slice(-20).join('\n');
         try {
@@ -89,10 +92,55 @@ export function setupSocketHandlers(io: Server) {
             userId,
             recentTranscript,
             byokConfig, // Use BYOK keys if provided, else server defaults
-            sessionSkills
+            sessionSkills,
+            recentWhisperContents // Pass recent whispers so LLM doesn't repeat
           );
 
           if (whisper) {
+            // Dedup: skip if we already whispered something very similar
+            const contentKey = whisper.content.toLowerCase().slice(0, 60);
+            if (recentWhisperContents.some(prev => prev === contentKey)) {
+              return; // Already whispered this
+            }
+            recentWhisperContents.push(contentKey);
+            if (recentWhisperContents.length > 10) {
+              recentWhisperContents = recentWhisperContents.slice(-10);
+            }
+
+            // Execute actions if the LLM returned a command
+            if (whisper.action === 'save_memory' && whisper.actionData) {
+              try {
+                await prisma.memory.create({
+                  data: {
+                    userId,
+                    content: String(whisper.actionData.content || whisper.content),
+                    importance: Number(whisper.actionData.importance) || 7,
+                    category: String(whisper.actionData.category || 'fact'),
+                    source: currentSessionId || 'voice_command',
+                  },
+                });
+                console.log(`[agent] Saved memory for user ${userId}: ${whisper.actionData.content}`);
+              } catch (memErr) {
+                console.error('[agent] Failed to save memory:', memErr);
+                whisper.content = 'Failed to save to memory. I\'ll try again next time.';
+                whisper.type = 'warning';
+              }
+            }
+
+            if (whisper.action === 'web_search' && whisper.actionData?.query) {
+              try {
+                const results = await search.search(String(whisper.actionData.query));
+                const formatted = results
+                  .map((r) => r.title ? `${r.title}: ${r.snippet}` : r.snippet)
+                  .join('\n\n');
+                whisper.detail = formatted || 'No results found.';
+                whisper.content = `🔍 ${whisper.actionData.query}`;
+              } catch (searchErr) {
+                console.error('[agent] Search failed:', searchErr);
+                whisper.detail = 'Search failed. I\'ll answer from my knowledge instead.';
+              }
+            }
+
             const card = {
               id: uuid(),
               type: whisper.type,
@@ -116,6 +164,7 @@ export function setupSocketHandlers(io: Server) {
         deepgram = null;
       }
       transcriptBuffer = [];
+      recentWhisperContents = [];
       currentSessionId = null;
     }
 
@@ -304,6 +353,7 @@ export function setupSocketHandlers(io: Server) {
       }
 
       transcriptBuffer = [];
+      recentWhisperContents = [];
       currentSessionId = null;
       console.log(`Session stopped: ${sessionId}`);
     });

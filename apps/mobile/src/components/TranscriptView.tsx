@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useMemo } from 'react';
 import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
-import type { TranscriptSegment } from '../types';
+import type { TranscriptSegment, WhisperCardData } from '../types';
 import { colors, spacing, fontSize, radius } from '../theme';
 
 const SPEAKER_COLORS: Record<string, string> = {
@@ -14,16 +14,39 @@ const SPEAKER_COLORS: Record<string, string> = {
   'Person E': '#f472b6',
 };
 
+/** Whisper type styling — matches WhisperCard.tsx */
+const WHISPER_TYPE_CONFIG: Record<
+  string,
+  { icon: keyof typeof Ionicons.glyphMap; color: string; bg: string; label: string }
+> = {
+  definition: { icon: 'book-outline', color: '#a78bfa', bg: 'rgba(167, 139, 250, 0.12)', label: 'Definition' },
+  response: { icon: 'chatbubble-outline', color: '#7c7fff', bg: 'rgba(124, 127, 255, 0.12)', label: 'Angel' },
+  memory_saved: { icon: 'checkmark-circle-outline', color: '#34d399', bg: 'rgba(52, 211, 153, 0.12)', label: 'Saved' },
+  search: { icon: 'search-outline', color: '#f472b6', bg: 'rgba(244, 114, 182, 0.12)', label: 'Search' },
+  insight: { icon: 'bulb-outline', color: '#7c7fff', bg: 'rgba(124, 127, 255, 0.12)', label: 'Insight' },
+  action: { icon: 'arrow-forward-circle-outline', color: '#34d399', bg: 'rgba(52, 211, 153, 0.12)', label: 'Action' },
+  warning: { icon: 'warning-outline', color: '#fbbf24', bg: 'rgba(251, 191, 36, 0.12)', label: 'Heads Up' },
+  memory: { icon: 'bookmark-outline', color: '#38bdf8', bg: 'rgba(56, 189, 248, 0.12)', label: 'Remembered' },
+  default: { icon: 'sparkles-outline', color: '#7c7fff', bg: 'rgba(124, 127, 255, 0.12)', label: 'Angel' },
+};
+
 interface SpeakerGroup {
   speaker: string;
   finalText: string;
   interimText: string;
   key: string;
+  timestamp: number; // ms since epoch of last segment in this group
 }
+
+/** A unified timeline item — either a transcript group or an inline whisper */
+type TimelineItem =
+  | { kind: 'transcript'; group: SpeakerGroup }
+  | { kind: 'whisper'; card: WhisperCardData };
 
 interface TranscriptViewProps {
   segments: TranscriptSegment[];
   speakerNames: Record<string, string>;
+  whisperCards?: WhisperCardData[];
 }
 
 function groupSegmentsBySpeaker(
@@ -49,12 +72,14 @@ function groupSegmentsBySpeaker(
       } else {
         lastGroup.interimText = segment.text.trim();
       }
+      lastGroup.timestamp = segment.timestamp;
     } else {
       const group: SpeakerGroup = {
         speaker: label,
         finalText: '',
         interimText: '',
         key: `group-${groups.length}-${speakerKey}`,
+        timestamp: segment.timestamp,
       };
       if (segment.isFinal) {
         group.finalText = segment.text.trim();
@@ -68,7 +93,39 @@ function groupSegmentsBySpeaker(
   return groups;
 }
 
-export function TranscriptView({ segments, speakerNames }: TranscriptViewProps) {
+/** Merge transcript groups and whisper cards into a single chronological timeline */
+function buildTimeline(groups: SpeakerGroup[], whisperCards: WhisperCardData[]): TimelineItem[] {
+  // Sort whispers oldest-first for correct chronological insertion
+  const sortedWhispers = [...whisperCards].sort((a, b) => {
+    const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return ta - tb;
+  });
+
+  // Two-pointer merge: both groups and sorted whispers are in chronological order
+  const items: TimelineItem[] = [];
+  let gi = 0;
+  let wi = 0;
+
+  while (gi < groups.length || wi < sortedWhispers.length) {
+    const groupTime = gi < groups.length ? groups[gi].timestamp : Infinity;
+    const whisperTime = wi < sortedWhispers.length
+      ? (sortedWhispers[wi].createdAt ? new Date(sortedWhispers[wi].createdAt!).getTime() : Infinity)
+      : Infinity;
+
+    if (groupTime <= whisperTime) {
+      items.push({ kind: 'transcript', group: groups[gi] });
+      gi++;
+    } else {
+      items.push({ kind: 'whisper', card: sortedWhispers[wi] });
+      wi++;
+    }
+  }
+
+  return items;
+}
+
+export function TranscriptView({ segments, speakerNames, whisperCards }: TranscriptViewProps) {
   const scrollRef = useRef<ScrollView>(null);
 
   const groups = useMemo(
@@ -76,12 +133,17 @@ export function TranscriptView({ segments, speakerNames }: TranscriptViewProps) 
     [segments, speakerNames]
   );
 
+  const timeline = useMemo(
+    () => buildTimeline(groups, whisperCards || []),
+    [groups, whisperCards]
+  );
+
   useEffect(() => {
     const timer = setTimeout(() => {
       scrollRef.current?.scrollToEnd({ animated: true });
     }, 16);
     return () => clearTimeout(timer);
-  }, [groups.length, segments.length]);
+  }, [timeline.length]);
 
   const getSpeakerColor = (label: string) => {
     return SPEAKER_COLORS[label] || colors.primary;
@@ -108,7 +170,39 @@ export function TranscriptView({ segments, speakerNames }: TranscriptViewProps) 
       contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}
     >
-      {groups.map((group) => {
+      {timeline.map((item) => {
+        if (item.kind === 'whisper') {
+          const config = WHISPER_TYPE_CONFIG[item.card.type] || WHISPER_TYPE_CONFIG.default;
+          return (
+            <TouchableOpacity
+              key={`whisper-${item.card.id}`}
+              style={[styles.inlineWhisper, { borderLeftColor: config.color }]}
+              activeOpacity={0.8}
+              onLongPress={async () => {
+                const text = item.card.detail
+                  ? `${item.card.content}\n${item.card.detail}`
+                  : item.card.content;
+                await Clipboard.setStringAsync(text);
+                Alert.alert('Copied', 'Text copied to clipboard');
+              }}
+            >
+              <View style={styles.whisperHeader}>
+                <View style={[styles.whisperBadge, { backgroundColor: config.bg }]}>
+                  <Ionicons name={config.icon} size={11} color={config.color} />
+                  <Text style={[styles.whisperLabel, { color: config.color }]}>
+                    {config.label}
+                  </Text>
+                </View>
+              </View>
+              <Text style={styles.whisperContent}>{item.card.content}</Text>
+              {item.card.detail && (
+                <Text style={styles.whisperDetail}>{item.card.detail}</Text>
+              )}
+            </TouchableOpacity>
+          );
+        }
+
+        const { group } = item;
         const color = getSpeakerColor(group.speaker);
         const fullText =
           group.finalText +
@@ -225,5 +319,46 @@ const styles = StyleSheet.create({
   textInterim: {
     color: colors.textTertiary,
     fontStyle: 'italic',
+  },
+  // Inline whisper styles
+  inlineWhisper: {
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.sm,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.primary,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 2,
+    marginBottom: spacing.lg,
+    marginLeft: spacing.xs,
+  },
+  whisperHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: spacing.xs,
+  },
+  whisperBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: radius.full,
+    gap: 3,
+  },
+  whisperLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
+  },
+  whisperContent: {
+    color: colors.text,
+    fontSize: fontSize.sm,
+    lineHeight: 20,
+  },
+  whisperDetail: {
+    color: colors.textSecondary,
+    fontSize: fontSize.xs,
+    marginTop: 2,
+    lineHeight: 17,
   },
 });
