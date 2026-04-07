@@ -67,6 +67,7 @@ export function setupSocketHandlers(io: Server) {
     }
 
     let angelProcessing = false; // Guard against concurrent angel:activate calls
+    let angelThinkingTimer: ReturnType<typeof setTimeout> | null = null;
 
     /**
      * Handle a whisper from the Realtime API — execute any actions and emit to client.
@@ -122,6 +123,8 @@ export function setupSocketHandlers(io: Server) {
 
     async function cleanupSession() {
       clearAllTimers();
+      angelProcessing = false;
+      if (angelThinkingTimer) { clearTimeout(angelThinkingTimer); angelThinkingTimer = null; }
       if (realtime) {
         await realtime.close();
         realtime = null;
@@ -230,21 +233,20 @@ export function setupSocketHandlers(io: Server) {
                 socket.emit('angel:thinking', { active: true });
 
                 // Small delay to let the owner finish their sentence, then force respond
-                setTimeout(async () => {
+                angelThinkingTimer = setTimeout(async () => {
                   try {
                     if (realtime) {
                       realtime.forceRespond();
                     }
                   } catch (err) {
                     console.error('[agent] Wake word response error:', err);
-                  } finally {
-                    // forceRespond is async via WebSocket — thinking indicator
-                    // will be cleared when the whisper card is emitted
-                    setTimeout(() => {
-                      angelProcessing = false;
-                      socket.emit('angel:thinking', { active: false });
-                    }, 5000); // Max 5s thinking indicator
                   }
+                  // forceRespond is async via WebSocket — set max thinking indicator
+                  angelThinkingTimer = setTimeout(() => {
+                    angelProcessing = false;
+                    socket.emit('angel:thinking', { active: false });
+                    angelThinkingTimer = null;
+                  }, 5000);
                 }, 2000); // 2s delay to capture the full sentence after the wake word
               }
             }
@@ -342,9 +344,10 @@ export function setupSocketHandlers(io: Server) {
           realtime.forceRespond();
           // forceRespond triggers async response via WebSocket
           // Set a max timeout to clear thinking indicator
-          setTimeout(() => {
+          angelThinkingTimer = setTimeout(() => {
             angelProcessing = false;
             socket.emit('angel:thinking', { active: false });
+            angelThinkingTimer = null;
           }, 8000);
         } else {
           // No Realtime connection — fallback message
@@ -434,6 +437,8 @@ export function setupSocketHandlers(io: Server) {
 
       transcriptBuffer = [];
       currentSessionId = null;
+      angelProcessing = false;
+      if (angelThinkingTimer) { clearTimeout(angelThinkingTimer); angelThinkingTimer = null; }
       console.log(`Session stopped: ${sessionId}`);
     });
 

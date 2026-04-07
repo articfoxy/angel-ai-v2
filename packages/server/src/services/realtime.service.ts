@@ -36,7 +36,6 @@ export class RealtimeService {
   private ws: WebSocket | null = null;
   private config: RealtimeConfig;
   private sessionActive = false;
-  private reconnectAttempts = 0;
   private reconnecting = false;
   private pendingTranscript: string[] = [];
   private linesSinceLastResponse = 0;
@@ -150,6 +149,10 @@ export class RealtimeService {
   feedTranscript(line: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.pendingTranscript.push(line);
+      // Cap buffer to prevent unbounded growth during prolonged disconnection
+      if (this.pendingTranscript.length > 100) {
+        this.pendingTranscript = this.pendingTranscript.slice(-60);
+      }
       return;
     }
 
@@ -235,11 +238,12 @@ export class RealtimeService {
     switch (event.type) {
       case 'session.created':
         console.log('[Realtime] Session created:', event.session?.id);
-        // Flush any pending transcript
-        for (const line of this.pendingTranscript) {
+        // Flush any pending transcript (clear before iterating to avoid mutation)
+        const pending = this.pendingTranscript;
+        this.pendingTranscript = [];
+        for (const line of pending) {
           this.feedTranscript(line);
         }
-        this.pendingTranscript = [];
         break;
 
       case 'session.updated':
@@ -256,7 +260,7 @@ export class RealtimeService {
 
       case 'response.function_call_arguments.done':
         // Function call completed — handle it
-        this.handleFunctionCall(event.name, event.arguments);
+        this.handleFunctionCall(event.name, event.arguments, event.call_id);
         break;
 
       case 'response.done':
@@ -288,7 +292,7 @@ export class RealtimeService {
   /**
    * Handle a function call from the model.
    */
-  private handleFunctionCall(name: string, argsJson: string): void {
+  private handleFunctionCall(name: string, argsJson: string, callId: string): void {
     try {
       const args = JSON.parse(argsJson);
 
@@ -303,12 +307,12 @@ export class RealtimeService {
         });
       }
 
-      // Send function output back to the model
+      // Send function output back to the model using the actual call_id
       this.send({
         type: 'conversation.item.create',
         item: {
           type: 'function_call_output',
-          call_id: name, // Simplified — in production, track actual call_id
+          call_id: callId,
           output: JSON.stringify({ success: true }),
         },
       });
@@ -368,7 +372,6 @@ export class RealtimeService {
       try {
         await this.connect();
         this.reconnecting = false;
-        this.reconnectAttempts = 0;
         return;
       } catch (err) {
         console.error(`[Realtime] Reconnect attempt ${i + 1} failed:`, err);

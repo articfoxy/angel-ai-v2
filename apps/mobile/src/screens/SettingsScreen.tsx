@@ -39,17 +39,6 @@ const ANGEL_INSTRUCTION_PRESETS = [
   { id: 'learn', label: 'Help me learn & remember key points', icon: '🧠' },
 ];
 
-const PRESET_INSTRUCTIONS: Record<string, string> = {
-  jargon: 'Explain any jargon, acronyms, or technical terms used in the conversation.',
-  translate_zh: 'When someone speaks Chinese (Mandarin/Cantonese), translate it to English for me.',
-  translate_es: 'When someone speaks Spanish, translate it to English for me.',
-  meeting: 'Track action items, decisions, and key takeaways from the conversation.',
-  coach: 'Give me tips on my communication — tone, clarity, persuasiveness.',
-  fact_check: 'Flag any inaccuracies, contradictions, or questionable claims.',
-  sales: 'Help me navigate the sales conversation — objection handling, closing techniques, value framing.',
-  learn: 'Help me learn from the conversation — summarize key points, explain concepts, suggest follow-ups.',
-};
-
 const ENGLISH_LOCALES = [
   { code: 'en', label: 'General', flag: '🌐' },
   { code: 'en-US', label: 'US', flag: '🇺🇸' },
