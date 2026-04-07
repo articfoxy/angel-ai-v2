@@ -66,6 +66,8 @@ export function StartScreen() {
   // Keep refs so socket callbacks can read the latest values
   const isActiveRef = useRef(false);
   const sessionIdRef = useRef<string | null>(null);
+  /** Cache the full session:start payload so reconnect can re-send it intact */
+  const startPayloadRef = useRef<Record<string, unknown> | null>(null);
 
   useEffect(() => {
     isActiveRef.current = isActive;
@@ -189,6 +191,7 @@ export function StartScreen() {
       setWhisperCards([]);
       setSpeakerNames({});
       setElapsed(0);
+      startPayloadRef.current = null;
       cleanupSessionListeners();
       disconnectSocket();
       refetchSessions();
@@ -206,6 +209,7 @@ export function StartScreen() {
       setWhisperCards([]);
       setSpeakerNames({});
       setElapsed(0);
+      startPayloadRef.current = null;
       cleanupSessionListeners();
       disconnectSocket();
       refetchSessions();
@@ -236,6 +240,7 @@ export function StartScreen() {
       setWhisperCards([]);
       setSpeakerNames({});
       setElapsed(0);
+      startPayloadRef.current = null;
       cleanupSessionListeners();
       disconnectSocket();
       refetchSessions();
@@ -253,11 +258,13 @@ export function StartScreen() {
       } else {
         setIsReconnecting(false);
         // Socket reconnected during an active session — re-register listeners
-        // and re-emit session:start so the server resumes the session
+        // and re-emit session:start with the FULL original payload so the server
+        // gets instructions, BYOK, and speech settings again.
         const sock = getSocket();
         if (sock && sessionIdRef.current) {
           registerSessionListeners(sock);
-          sock.emit('session:start', { sessionId: sessionIdRef.current });
+          const payload = startPayloadRef.current || { sessionId: sessionIdRef.current };
+          sock.emit('session:start', payload);
         }
       }
     });
@@ -418,10 +425,11 @@ export function StartScreen() {
           // Non-fatal — session starts with default instructions
         }
 
-        socket.emit('session:start', startPayload);
-
-        // Register all session-specific listeners (removes stale ones first)
+        // Cache the full payload for reconnect and register listeners BEFORE
+        // emitting so we don't miss any fast server responses.
+        startPayloadRef.current = startPayload;
         registerSessionListeners(socket);
+        socket.emit('session:start', startPayload);
 
         // Start audio recording and stream raw PCM chunks to the server.
         // Audio is sent as binary (ArrayBuffer) for 33% less bandwidth vs base64.
@@ -447,6 +455,7 @@ export function StartScreen() {
         setIsReconnecting(false);
         setSessionId(null);
         setElapsed(0);
+        startPayloadRef.current = null;
         Alert.alert(
           'Connection Failed',
           err?.message || 'Could not start session. Please check your connection and try again.'

@@ -222,7 +222,8 @@ export class RealtimeService {
       return;
     }
 
-    // Cancel any in-progress response
+    // Cancel any in-progress response and bump generation so stale
+    // response.done from the cancelled response is ignored.
     if (this.responseInProgress) {
       this.send({ type: 'response.cancel' });
       this.responseInProgress = false;
@@ -316,7 +317,13 @@ export class RealtimeService {
         this.handleFunctionCall(event.name, event.arguments, event.call_id);
         break;
 
-      case 'response.done':
+      case 'response.done': {
+        // If this response was cancelled (status=cancelled), ignore it entirely
+        // to prevent stale data from a cancelled response stomping a new one.
+        if (event.response?.status === 'cancelled') {
+          console.log('[Realtime] Ignoring cancelled response.done');
+          break;
+        }
         this.clearResponseTimeout();
         this.responseInProgress = false;
         console.log('[Realtime] Response done. Text length:', this.currentResponseText.length,
@@ -326,6 +333,7 @@ export class RealtimeService {
           this.currentResponseText = '';
         }
         break;
+      }
 
       case 'error':
         console.error('[Realtime] API error:', JSON.stringify(event.error));
@@ -383,7 +391,7 @@ export class RealtimeService {
     console.log('[Realtime] Parsing whisper from:', text.substring(0, 100));
     try {
       // Extract JSON from potential markdown code blocks
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      const jsonMatch = text.match(/\{[\s\S]*?\}/);
       if (!jsonMatch) {
         console.warn('[Realtime] No JSON found in response text');
         return;
@@ -494,5 +502,6 @@ If nothing useful to say, respond: { "skip": true }
 - ALWAYS return valid JSON only — no markdown, no explanation, just the JSON object
 - Be concise: 1-2 sentences max
 - Never repeat yourself
-- Prioritize the user's instructions above`;
+- Prioritize the user's instructions above all else
+- Only respond when you have genuinely useful information`;
 }

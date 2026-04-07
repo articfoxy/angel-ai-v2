@@ -119,6 +119,13 @@ export function setupSocketHandlers(io: Server) {
         createdAt: new Date().toISOString(),
       };
       socket.emit('whisper', card);
+
+      // Clear thinking indicator as soon as whisper arrives (don't wait for timeout)
+      if (angelProcessing) {
+        angelProcessing = false;
+        if (angelThinkingTimer) { clearTimeout(angelThinkingTimer); angelThinkingTimer = null; }
+        socket.emit('angel:thinking', { active: false });
+      }
     }
 
     async function cleanupSession() {
@@ -234,7 +241,7 @@ export function setupSocketHandlers(io: Server) {
                 socket.emit('angel:thinking', { active: true });
 
                 // Small delay to let the owner finish their sentence, then force respond
-                angelThinkingTimer = setTimeout(async () => {
+                const wakeDelayTimer = setTimeout(async () => {
                   try {
                     if (realtime) {
                       realtime.forceRespond();
@@ -243,12 +250,15 @@ export function setupSocketHandlers(io: Server) {
                     console.error('[agent] Wake word response error:', err);
                   }
                   // forceRespond is async via WebSocket — set max thinking indicator
+                  // Clear the outer reference before setting the new timeout
                   angelThinkingTimer = setTimeout(() => {
                     angelProcessing = false;
                     socket.emit('angel:thinking', { active: false });
                     angelThinkingTimer = null;
                   }, 5000);
                 }, 2000); // 2s delay to capture the full sentence after the wake word
+                // Track the outer timer so cleanupSession can cancel it
+                angelThinkingTimer = wakeDelayTimer;
               }
             }
           }
@@ -375,6 +385,16 @@ export function setupSocketHandlers(io: Server) {
     });
 
     socket.on('session:stop', async ({ sessionId }: { sessionId: string }) => {
+      // Validate session ownership to prevent another user from stopping a session
+      if (!socket.userId) return;
+      const sessionRecord = await prisma.session.findFirst({
+        where: { id: sessionId, userId: socket.userId },
+      });
+      if (!sessionRecord) {
+        console.warn(`[session:stop] Rejected — user ${socket.userId} does not own session ${sessionId}`);
+        return;
+      }
+
       // Clean up timers, Realtime, and Deepgram
       clearAllTimers();
 

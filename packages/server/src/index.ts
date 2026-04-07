@@ -31,13 +31,11 @@ app.use(express.json({ limit: '2mb' }));
 // Health check
 app.get('/health', (_, res) => res.json({ status: 'ok', version: '2.0.0' }));
 
-// Debug endpoint — check env vars and test Deepgram connection
-app.get('/debug/env', (_, res) => {
-  const dgKey = process.env.DEEPGRAM_API_KEY || '';
-  const oaiKey = process.env.OPENAI_API_KEY || '';
+// Debug endpoint — check env vars (authenticated to prevent key prefix leaks)
+app.get('/debug/env', authenticateToken, (_, res) => {
   res.json({
-    deepgram: dgKey ? `set (${dgKey.substring(0, 8)}...)` : 'MISSING',
-    openai: oaiKey ? `set (${oaiKey.substring(0, 8)}...)` : 'MISSING',
+    deepgram: process.env.DEEPGRAM_API_KEY ? 'set' : 'MISSING',
+    openai: process.env.OPENAI_API_KEY ? 'set' : 'MISSING',
     jwt_secret: process.env.JWT_SECRET ? 'set' : 'MISSING',
     database_url: process.env.DATABASE_URL ? 'set' : 'MISSING',
     node_env: process.env.NODE_ENV || 'unset',
@@ -45,8 +43,8 @@ app.get('/debug/env', (_, res) => {
   });
 });
 
-// Debug endpoint — test OpenAI Realtime API connectivity
-app.get('/debug/realtime', async (_, res) => {
+// Debug endpoint — test OpenAI Realtime API connectivity (authenticated)
+app.get('/debug/realtime', authenticateToken, async (_, res) => {
   const WebSocket = (await import('ws')).default;
   const key = process.env.OPENAI_API_KEY || '';
   if (!key) return res.json({ status: 'error', message: 'No OPENAI_API_KEY' });
