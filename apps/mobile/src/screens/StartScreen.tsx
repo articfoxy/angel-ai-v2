@@ -43,6 +43,7 @@ const SESSION_EVENTS = [
   'session:timeout',
   'session:error',
   'deepgram:status',
+  'angel:thinking',
 ] as const;
 
 export function StartScreen() {
@@ -58,6 +59,7 @@ export function StartScreen() {
   const [elapsed, setElapsed] = useState(0);
   const [gain, setGainState] = useState(getGain());
   const [showGain, setShowGain] = useState(false);
+  const [angelThinking, setAngelThinking] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const debriefTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -181,6 +183,7 @@ export function StartScreen() {
       stopRecording().catch(() => {});
       if (timerRef.current) clearInterval(timerRef.current);
       setIsActive(false);
+      setAngelThinking(false);
       setSessionId(null);
       setSegments([]);
       setWhisperCards([]);
@@ -197,6 +200,7 @@ export function StartScreen() {
       stopRecording().catch(() => {});
       if (timerRef.current) clearInterval(timerRef.current);
       setIsActive(false);
+      setAngelThinking(false);
       setSessionId(null);
       setSegments([]);
       setWhisperCards([]);
@@ -206,6 +210,10 @@ export function StartScreen() {
       disconnectSocket();
       refetchSessions();
       Alert.alert('Session Ended', data.message || 'Session timed out');
+    });
+
+    sock.on('angel:thinking', (data: { active: boolean }) => {
+      setAngelThinking(data.active);
     });
 
     sock.on('deepgram:status', (data: { status: string }) => {
@@ -222,6 +230,7 @@ export function StartScreen() {
       stopRecording().catch(() => {});
       if (timerRef.current) clearInterval(timerRef.current);
       setIsActive(false);
+      setAngelThinking(false);
       setSessionId(null);
       setSegments([]);
       setWhisperCards([]);
@@ -266,6 +275,13 @@ export function StartScreen() {
       if (debriefTimeoutRef.current) clearTimeout(debriefTimeoutRef.current);
     };
   }, [cleanupSessionListeners]);
+
+  const handleAngelActivate = useCallback(() => {
+    const sock = getSocket();
+    if (!sock?.connected || !isActive) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    sock.emit('angel:activate');
+  }, [isActive]);
 
   const handleToggle = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -361,6 +377,20 @@ export function StartScreen() {
         if (byokKey) {
           startPayload.byok = { provider: byokProvider, apiKey: byokKey };
         }
+
+        // Load speech recognition settings (locale + keywords)
+        const speechLocale = await SecureStore.getItemAsync('angel_v2_speech_locale');
+        const keywordsRaw = await SecureStore.getItemAsync('angel_v2_speech_keywords');
+        const keywords = keywordsRaw
+          ? keywordsRaw.split('\n').map(k => k.trim()).filter(Boolean)
+          : undefined;
+        if (speechLocale || keywords) {
+          startPayload.speech = {
+            ...(speechLocale ? { language: speechLocale } : {}),
+            ...(keywords && keywords.length > 0 ? { keywords } : {}),
+          };
+        }
+
         socket.emit('session:start', startPayload);
 
         // Register all session-specific listeners (removes stale ones first)
@@ -477,7 +507,22 @@ export function StartScreen() {
                 </Text>
               </TouchableOpacity>
               <AngelButton onPress={handleToggle} isActive={true} />
-              <View style={{ width: 56 }} />
+              <TouchableOpacity
+                onPress={handleAngelActivate}
+                disabled={angelThinking}
+                style={[
+                  styles.askAngelBtn,
+                  angelThinking && { opacity: 0.5 },
+                ]}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                {angelThinking ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : (
+                  <Ionicons name="sparkles" size={18} color={colors.primary} />
+                )}
+                <Text style={styles.askAngelText}>Ask</Text>
+              </TouchableOpacity>
             </View>
           </View>
         </View>
@@ -586,6 +631,22 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   activeContainer: { flex: 1 },
+  askAngelBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: spacing.xs + 2,
+    borderRadius: radius.full,
+    backgroundColor: colors.primaryMuted,
+    width: 56,
+    justifyContent: 'center',
+  },
+  askAngelText: {
+    color: colors.primary,
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+  },
   activeButtonRow: {
     paddingVertical: spacing.sm,
     borderTopWidth: 1,

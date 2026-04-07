@@ -18,6 +18,10 @@ interface DeepgramConfig {
   voiceprint?: any | null;  // AudioFeatures from voiceprint enrollment
   sessionId: string;
   userId: string;
+  /** Deepgram language code, e.g. "en", "en-US", "en-GB", "en-IN", "en-AU" */
+  language?: string;
+  /** Keywords to boost recognition for, e.g. ["kubernetes:2", "LTV:CAC:1.5"] */
+  keywords?: string[];
 }
 
 const CONNECTION_TIMEOUT_MS = 5000;
@@ -63,9 +67,9 @@ export class DeepgramService {
     }
     const deepgram = createClient(apiKey);
 
-    this.connection = deepgram.listen.live({
+    const dgOptions: Record<string, unknown> = {
       model: 'nova-3',
-      language: 'en',
+      language: this.config.language || 'en',
       smart_format: true,
       diarize: true,
       encoding: 'linear16',
@@ -76,7 +80,15 @@ export class DeepgramService {
       endpointing: 150,
       vad_events: true,
       no_delay: true,
-    });
+    };
+
+    // Keyword boosting: improves recognition for specific terms
+    if (this.config.keywords && this.config.keywords.length > 0) {
+      dgOptions.keywords = this.config.keywords;
+    }
+
+    console.log(`[Deepgram] Language: ${dgOptions.language}, Keywords: ${this.config.keywords?.length || 0}`);
+    this.connection = deepgram.listen.live(dgOptions);
 
     // Wait for the connection to actually open before returning.
     // Audio sent before Open fires is silently dropped by Deepgram.

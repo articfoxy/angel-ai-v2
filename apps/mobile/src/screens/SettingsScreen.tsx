@@ -28,6 +28,17 @@ const API_KEY_STORAGE = {
 
 type ModelProvider = 'openai' | 'anthropic' | 'google';
 
+const ENGLISH_LOCALES = [
+  { code: 'en', label: 'General', flag: '🌐' },
+  { code: 'en-US', label: 'US', flag: '🇺🇸' },
+  { code: 'en-GB', label: 'UK', flag: '🇬🇧' },
+  { code: 'en-AU', label: 'Australia', flag: '🇦🇺' },
+  { code: 'en-IN', label: 'India', flag: '🇮🇳' },
+  { code: 'en-SG', label: 'Singapore', flag: '🇸🇬' },
+  { code: 'en-NZ', label: 'NZ', flag: '🇳🇿' },
+  { code: 'en-IE', label: 'Ireland', flag: '🇮🇪' },
+];
+
 export function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const { user, logout } = useAuth();
@@ -41,6 +52,8 @@ export function SettingsScreen() {
   const [byok, setByok] = useState(false);
   const [testingKey, setTestingKey] = useState<ModelProvider | null>(null);
   const [voiceprintEnrolled, setVoiceprintEnrolled] = useState(false);
+  const [speechLocale, setSpeechLocale] = useState('en');
+  const [keywordsText, setKeywordsText] = useState('');
 
   const version = Constants.expoConfig?.version || '2.0.0';
   const buildNumber = Constants.expoConfig?.ios?.buildNumber || '';
@@ -55,7 +68,25 @@ export function SettingsScreen() {
   React.useEffect(() => {
     loadKeys();
     loadVoiceprintStatus();
+    loadSpeechSettings();
   }, [loadVoiceprintStatus]);
+
+  const loadSpeechSettings = async () => {
+    const locale = await SecureStore.getItemAsync('angel_v2_speech_locale');
+    if (locale) setSpeechLocale(locale);
+    const kw = await SecureStore.getItemAsync('angel_v2_speech_keywords');
+    if (kw) setKeywordsText(kw);
+  };
+
+  const saveSpeechLocale = async (locale: string) => {
+    setSpeechLocale(locale);
+    await SecureStore.setItemAsync('angel_v2_speech_locale', locale);
+  };
+
+  const saveKeywords = async () => {
+    await SecureStore.setItemAsync('angel_v2_speech_keywords', keywordsText);
+    Alert.alert('Saved', 'Keywords will be used in your next session.');
+  };
 
   const loadKeys = async () => {
     const keys: Record<ModelProvider, string> = { openai: '', anthropic: '', google: '' };
@@ -293,6 +324,57 @@ export function SettingsScreen() {
           />
         </View>
 
+        {/* Speech Recognition */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Speech Recognition</Text>
+
+          <View style={styles.card}>
+            <Text style={styles.cardLabel}>English Accent</Text>
+            <Text style={styles.cardDesc}>Choose the closest match for better accuracy</Text>
+            <View style={styles.localeGrid}>
+              {ENGLISH_LOCALES.map((loc) => (
+                <TouchableOpacity
+                  key={loc.code}
+                  style={[
+                    styles.localeChip,
+                    speechLocale === loc.code && styles.localeChipActive,
+                  ]}
+                  onPress={() => saveSpeechLocale(loc.code)}
+                >
+                  <Text style={styles.localeFlag}>{loc.flag}</Text>
+                  <Text style={[
+                    styles.localeLabel,
+                    speechLocale === loc.code && styles.localeLabelActive,
+                  ]}>
+                    {loc.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
+          <View style={styles.card}>
+            <Text style={styles.cardLabel}>Keyword Boosting</Text>
+            <Text style={styles.cardDesc}>
+              Add words Angel often mishears, one per line. Improves recognition for names, jargon, etc.
+            </Text>
+            <TextInput
+              style={styles.keywordsInput}
+              value={keywordsText}
+              onChangeText={setKeywordsText}
+              placeholder={"kubernetes\nreact native\nJensen Huang"}
+              placeholderTextColor={colors.textTertiary}
+              multiline
+              numberOfLines={4}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TouchableOpacity style={styles.saveKeyButton} onPress={saveKeywords}>
+              <Text style={styles.saveKeyText}>Save Keywords</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
         {/* Account */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account</Text>
@@ -482,6 +564,40 @@ const styles = StyleSheet.create({
     borderColor: colors.danger + '30',
   },
   deleteAccountText: { color: colors.danger, fontSize: fontSize.md, fontWeight: '600' },
+  localeGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  localeChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: spacing.xs + 2,
+    borderRadius: 20,
+    backgroundColor: colors.surfaceHover,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  localeChipActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryMuted,
+  },
+  localeFlag: { fontSize: 14 },
+  localeLabel: { color: colors.textSecondary, fontSize: fontSize.xs, fontWeight: '600' },
+  localeLabelActive: { color: colors.primary },
+  keywordsInput: {
+    backgroundColor: colors.surfaceHover,
+    borderRadius: 8,
+    padding: spacing.sm,
+    color: colors.text,
+    fontSize: fontSize.sm,
+    marginTop: spacing.sm,
+    minHeight: 80,
+    textAlignVertical: 'top',
+  },
   versionText: {
     color: colors.textTertiary,
     fontSize: fontSize.sm,

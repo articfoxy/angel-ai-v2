@@ -80,77 +80,108 @@ export function setupSocketHandlers(io: Server) {
 
     let byokConfig: InferenceConfig | undefined;
     let recentWhisperContents: string[] = []; // Track last 10 whispers to avoid duplicates
+    let angelProcessing = false; // Guard against concurrent angel:activate calls
+    let sessionSkillsCache: string[] = []; // Cache skills for angel:activate
+
+    /**
+     * Core whisper generation + action execution + emit.
+     * Shared between the periodic timer and angel:activate.
+     * @param userId - Owner's user ID
+     * @param transcript - The transcript text to analyze
+     * @param skills - Active session skills
+     * @param isActivation - True if triggered by angel:activate (skips dedup for the first response)
+     */
+    async function generateAndEmitWhisper(
+      userId: string,
+      transcript: string,
+      skills: string[],
+      isActivation = false
+    ): Promise<void> {
+      const whisper = await inference.generateWhisper(
+        userId,
+        transcript,
+        byokConfig,
+        skills,
+        recentWhisperContents
+      );
+
+      if (!whisper) {
+        // If this was a manual activation and no whisper was generated, send a "nothing to add" response
+        if (isActivation) {
+          socket.emit('whisper', {
+            id: uuid(),
+            type: 'response',
+            content: 'Nothing new to add right now. Keep talking and I\'ll jump in when I can help.',
+            createdAt: new Date().toISOString(),
+          });
+        }
+        return;
+      }
+
+      // Dedup: skip if we already whispered something very similar (except for activations)
+      const contentKey = whisper.content.toLowerCase().slice(0, 60);
+      if (!isActivation && recentWhisperContents.some(prev => prev === contentKey)) {
+        return;
+      }
+      recentWhisperContents.push(contentKey);
+      if (recentWhisperContents.length > 10) {
+        recentWhisperContents = recentWhisperContents.slice(-10);
+      }
+
+      // Execute actions if the LLM returned a command
+      if (whisper.action === 'save_memory' && whisper.actionData) {
+        try {
+          await prisma.memory.create({
+            data: {
+              userId,
+              content: String(whisper.actionData.content || whisper.content),
+              importance: Number(whisper.actionData.importance) || 7,
+              category: String(whisper.actionData.category || 'fact'),
+              source: currentSessionId || 'voice_command',
+            },
+          });
+          console.log(`[agent] Saved memory for user ${userId}: ${whisper.actionData.content}`);
+        } catch (memErr) {
+          console.error('[agent] Failed to save memory:', memErr);
+          whisper.content = 'Failed to save to memory. I\'ll try again next time.';
+          whisper.type = 'warning';
+        }
+      }
+
+      if (whisper.action === 'web_search' && whisper.actionData?.query) {
+        try {
+          const results = await search.search(String(whisper.actionData.query));
+          const formatted = results
+            .map((r) => r.title ? `${r.title}: ${r.snippet}` : r.snippet)
+            .join('\n\n');
+          whisper.detail = formatted || 'No results found.';
+          whisper.content = `🔍 ${whisper.actionData.query}`;
+        } catch (searchErr) {
+          console.error('[agent] Search failed:', searchErr);
+          whisper.detail = 'Search failed. I\'ll answer from my knowledge instead.';
+        }
+      }
+
+      const card = {
+        id: uuid(),
+        type: whisper.type,
+        content: whisper.content,
+        detail: whisper.detail,
+        confidence: whisper.confidence,
+        createdAt: new Date().toISOString(),
+      };
+      socket.emit('whisper', card);
+    }
 
     function startWhisperTimer(userId: string, sessionSkills: string[]) {
+      sessionSkillsCache = sessionSkills; // Cache for angel:activate
       if (whisperTimer) return; // Already running
       whisperTimer = setInterval(async () => {
-        if (transcriptBuffer.length < 2) return; // Need some transcript first
+        if (transcriptBuffer.length < 2) return;
 
         const recentTranscript = transcriptBuffer.slice(-20).join('\n');
         try {
-          const whisper = await inference.generateWhisper(
-            userId,
-            recentTranscript,
-            byokConfig, // Use BYOK keys if provided, else server defaults
-            sessionSkills,
-            recentWhisperContents // Pass recent whispers so LLM doesn't repeat
-          );
-
-          if (whisper) {
-            // Dedup: skip if we already whispered something very similar
-            const contentKey = whisper.content.toLowerCase().slice(0, 60);
-            if (recentWhisperContents.some(prev => prev === contentKey)) {
-              return; // Already whispered this
-            }
-            recentWhisperContents.push(contentKey);
-            if (recentWhisperContents.length > 10) {
-              recentWhisperContents = recentWhisperContents.slice(-10);
-            }
-
-            // Execute actions if the LLM returned a command
-            if (whisper.action === 'save_memory' && whisper.actionData) {
-              try {
-                await prisma.memory.create({
-                  data: {
-                    userId,
-                    content: String(whisper.actionData.content || whisper.content),
-                    importance: Number(whisper.actionData.importance) || 7,
-                    category: String(whisper.actionData.category || 'fact'),
-                    source: currentSessionId || 'voice_command',
-                  },
-                });
-                console.log(`[agent] Saved memory for user ${userId}: ${whisper.actionData.content}`);
-              } catch (memErr) {
-                console.error('[agent] Failed to save memory:', memErr);
-                whisper.content = 'Failed to save to memory. I\'ll try again next time.';
-                whisper.type = 'warning';
-              }
-            }
-
-            if (whisper.action === 'web_search' && whisper.actionData?.query) {
-              try {
-                const results = await search.search(String(whisper.actionData.query));
-                const formatted = results
-                  .map((r) => r.title ? `${r.title}: ${r.snippet}` : r.snippet)
-                  .join('\n\n');
-                whisper.detail = formatted || 'No results found.';
-                whisper.content = `🔍 ${whisper.actionData.query}`;
-              } catch (searchErr) {
-                console.error('[agent] Search failed:', searchErr);
-                whisper.detail = 'Search failed. I\'ll answer from my knowledge instead.';
-              }
-            }
-
-            const card = {
-              id: uuid(),
-              type: whisper.type,
-              content: whisper.content,
-              detail: whisper.detail,
-              confidence: whisper.confidence,
-              createdAt: new Date().toISOString(),
-            };
-            socket.emit('whisper', card);
-          }
+          await generateAndEmitWhisper(userId, recentTranscript, sessionSkills);
         } catch (err) {
           console.error('Whisper generation error:', err);
         }
@@ -171,6 +202,7 @@ export function setupSocketHandlers(io: Server) {
     socket.on('session:start', async (payload: {
       sessionId: string;
       byok?: { provider: string; apiKey: string; model?: string };
+      speech?: { language?: string; keywords?: string[] };
     }) => {
       const { sessionId } = payload;
       if (!socket.userId) return;
@@ -225,6 +257,30 @@ export function setupSocketHandlers(io: Server) {
 
             // Start whisper timer on first real transcript segment (lazy start)
             startWhisperTimer(userId, session.skills);
+
+            // Voice wake word detection: "hi angel", "hey angel", "yo angel", "ok angel"
+            if (label === 'Owner') {
+              const lower = data.text.toLowerCase().trim();
+              const wakePatterns = /\b(hi|hey|yo|ok|okay)\s+angel\b/;
+              if (wakePatterns.test(lower) && !angelProcessing) {
+                console.log(`[agent] Wake word detected: "${data.text}"`);
+                angelProcessing = true;
+                socket.emit('angel:thinking', { active: true });
+
+                // Small delay to let the owner finish their sentence
+                setTimeout(async () => {
+                  try {
+                    const recentTranscript = transcriptBuffer.slice(-15).join('\n');
+                    await generateAndEmitWhisper(userId, recentTranscript, session.skills, true);
+                  } catch (err) {
+                    console.error('[agent] Wake word response error:', err);
+                  } finally {
+                    angelProcessing = false;
+                    socket.emit('angel:thinking', { active: false });
+                  }
+                }, 2000); // 2s delay to capture the full sentence after the wake word
+              }
+            }
           }
         },
         onSpeakerIdentified: (speakerId, label) => {
@@ -239,6 +295,8 @@ export function setupSocketHandlers(io: Server) {
         voiceprint: voiceprintRecord?.features ?? null,
         sessionId,
         userId,
+        language: payload.speech?.language,
+        keywords: payload.speech?.keywords,
       });
 
       try {
@@ -293,6 +351,47 @@ export function setupSocketHandlers(io: Server) {
         deepgram.sendAudio(buffer);
       } catch (err) {
         console.warn('[socket] Failed to process audio chunk:', err);
+      }
+    });
+
+    // Angel manual activation — button press triggers immediate whisper from last ~100 words
+    socket.on('angel:activate', async () => {
+      if (!currentSessionId || !socket.userId || angelProcessing) return;
+      if (transcriptBuffer.length < 1) {
+        socket.emit('whisper', {
+          id: uuid(),
+          type: 'response',
+          content: 'I need some conversation to work with first. Keep talking!',
+          createdAt: new Date().toISOString(),
+        });
+        return;
+      }
+
+      angelProcessing = true;
+      socket.emit('angel:thinking', { active: true });
+
+      try {
+        // Take last ~100 words (roughly last 10-15 transcript lines)
+        const recentLines = transcriptBuffer.slice(-15);
+        const recentTranscript = recentLines.join('\n');
+
+        await generateAndEmitWhisper(
+          socket.userId,
+          recentTranscript,
+          sessionSkillsCache,
+          true // isActivation — always respond even if nothing major
+        );
+      } catch (err) {
+        console.error('[angel:activate] Error:', err);
+        socket.emit('whisper', {
+          id: uuid(),
+          type: 'warning',
+          content: 'Something went wrong. Try again in a moment.',
+          createdAt: new Date().toISOString(),
+        });
+      } finally {
+        angelProcessing = false;
+        socket.emit('angel:thinking', { active: false });
       }
     });
 
