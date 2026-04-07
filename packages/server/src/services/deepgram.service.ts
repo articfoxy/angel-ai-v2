@@ -67,9 +67,25 @@ export class DeepgramService {
     }
     const deepgram = createClient(apiKey);
 
+    // Deepgram Nova-3 supports specific locales but not all (e.g. en-SG returns 400).
+    // Supported English: en, en-US, en-GB, en-AU, en-IN, en-NZ.
+    // For unsupported locales, fall back to the base language code.
+    const SUPPORTED_LOCALES = new Set([
+      'en', 'en-US', 'en-GB', 'en-AU', 'en-IN', 'en-NZ',
+      'zh', 'zh-CN', 'zh-TW', 'ja', 'ko', 'hi',
+      'es', 'es-419', 'fr', 'fr-CA', 'de', 'it', 'pt', 'pt-BR',
+      'nl', 'pl', 'ru', 'sv', 'da', 'no', 'fi', 'tr', 'uk', 'id', 'ms', 'tl', 'vi', 'th',
+    ]);
+    let language = this.config.language || 'en';
+    if (!SUPPORTED_LOCALES.has(language)) {
+      const base = language.split('-')[0];
+      console.log(`[Deepgram] Unsupported locale "${language}", falling back to "${base}"`);
+      language = SUPPORTED_LOCALES.has(base) ? base : 'en';
+    }
+
     const dgOptions: Record<string, unknown> = {
       model: 'nova-3',
-      language: this.config.language || 'en',
+      language,
       smart_format: true,
       diarize: true,
       encoding: 'linear16',
