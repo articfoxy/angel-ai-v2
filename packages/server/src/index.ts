@@ -90,6 +90,40 @@ app.get('/debug/realtime', authenticateToken, async (_, res) => {
   }
 });
 
+// Debug endpoint — test Deepgram connectivity with various parameter combos
+app.get('/debug/deepgram', authenticateToken, async (_, res) => {
+  const { createClient, LiveTranscriptionEvents } = await import('@deepgram/sdk');
+  const key = process.env.DEEPGRAM_API_KEY || '';
+  if (!key) return res.json({ status: 'error', message: 'No DEEPGRAM_API_KEY' });
+
+  // Test multiple parameter combos to isolate which one causes 400
+  const tests = [
+    { label: 'minimal', opts: { model: 'nova-3', encoding: 'linear16', sample_rate: 16000 } },
+    { label: 'with-lang-en', opts: { model: 'nova-3', encoding: 'linear16', sample_rate: 16000, language: 'en' } },
+    { label: 'with-lang-en-SG', opts: { model: 'nova-3', encoding: 'linear16', sample_rate: 16000, language: 'en-SG' } },
+    { label: 'nova-2-en-SG', opts: { model: 'nova-2', encoding: 'linear16', sample_rate: 16000, language: 'en-SG' } },
+    { label: 'full-config', opts: { model: 'nova-3', language: 'en-SG', smart_format: true, diarize: true, encoding: 'linear16', sample_rate: 16000, channels: 1, interim_results: true, utterance_end_ms: 250, endpointing: 150, vad_events: true, no_delay: true } },
+  ];
+
+  const results: any[] = [];
+  for (const test of tests) {
+    try {
+      const dg = createClient(key);
+      const conn = dg.listen.live(test.opts as any);
+      const result = await new Promise<string>((resolve) => {
+        const timeout = setTimeout(() => { try { conn.finish(); } catch {} resolve('timeout'); }, 5000);
+        conn.on(LiveTranscriptionEvents.Open, () => { clearTimeout(timeout); conn.finish(); resolve('ok'); });
+        conn.on(LiveTranscriptionEvents.Error, (err: any) => { clearTimeout(timeout); try { conn.finish(); } catch {} resolve(`error: ${err?.message || JSON.stringify(err)}`); });
+      });
+      results.push({ label: test.label, result });
+    } catch (err: any) {
+      results.push({ label: test.label, result: `exception: ${err.message}` });
+    }
+  }
+
+  res.json({ results });
+});
+
 // Auth routes (no auth middleware)
 app.use('/api/auth', authRouter);
 
