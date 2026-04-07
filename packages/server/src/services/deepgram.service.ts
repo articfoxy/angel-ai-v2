@@ -141,10 +141,14 @@ export class DeepgramService {
         const count = this.speakerCounts.get(speaker) || 0;
         this.speakerCounts.set(speaker, count + 1);
 
-        // After first 30s of speech, identify owner as most frequent speaker
+        // Identify owner once we have enough data.
+        // With voiceprint: wait longer (15 segments) so audio buffers have enough
+        // frames for meaningful feature extraction and similarity scoring.
+        // Without voiceprint: 10 segments is enough for frequency-based heuristic.
         if (!this.ownerIdentified) {
           const totalCount = Array.from(this.speakerCounts.values()).reduce((a, b) => a + b, 0);
-          if (totalCount >= 10) {
+          const threshold = this.config.voiceprint ? 15 : 10;
+          if (totalCount >= threshold) {
             this.identifyOwner();
           }
         }
@@ -161,7 +165,13 @@ export class DeepgramService {
           if (!this.speakerAudioBuffers.has(speaker)) {
             this.speakerAudioBuffers.set(speaker, []);
           }
-          this.speakerAudioBuffers.get(speaker)!.push(...segmentAudio);
+          const buf = this.speakerAudioBuffers.get(speaker)!;
+          buf.push(...segmentAudio);
+          // Cap at 30 frames per speaker to prevent memory leak in long sessions.
+          // 30 frames is more than enough for feature extraction (we use up to 20).
+          if (buf.length > 30) {
+            this.speakerAudioBuffers.set(speaker, buf.slice(-30));
+          }
         }
       }
 

@@ -98,6 +98,8 @@ export function VoiceEnrollment({ enrolled, enrolledDate, onEnrollmentChange }: 
   };
 
   const stopAndUpload = async () => {
+    // Guard against multiple calls (timer can fire multiple times before clearing)
+    if (!timerRef.current && !subscriptionRef.current) return;
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
