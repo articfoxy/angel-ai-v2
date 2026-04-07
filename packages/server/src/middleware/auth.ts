@@ -18,6 +18,10 @@ export function authenticateToken(req: AuthRequest, res: Response, next: NextFun
 
   try {
     const payload = jwt.verify(token, JWT_SECRET) as { userId: string };
+    if ((payload as any).type === 'refresh') {
+      res.status(401).json({ error: 'Access token required' });
+      return;
+    }
     req.userId = payload.userId;
     next();
   } catch {

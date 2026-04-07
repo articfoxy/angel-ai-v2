@@ -390,8 +390,10 @@ export class RealtimeService {
   private parseAndEmitWhisper(text: string): void {
     console.log('[Realtime] Parsing whisper from:', text.substring(0, 100));
     try {
-      // Extract JSON from potential markdown code blocks
-      const jsonMatch = text.match(/\{[\s\S]*?\}/);
+      // Extract JSON from potential markdown code blocks.
+      // Use greedy match so nested braces (e.g. {"content":"Consider {value}"})
+      // are captured in full rather than truncated at the first closing brace.
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
         if (parsed.skip) {

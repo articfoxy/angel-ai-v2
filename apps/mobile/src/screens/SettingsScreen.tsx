@@ -107,7 +107,12 @@ export function SettingsScreen() {
     // Load Angel Instructions
     const savedPresets = await SecureStore.getItemAsync('angel_v2_instruction_presets');
     if (savedPresets) {
-      try { setActivePresets(JSON.parse(savedPresets)); } catch {}
+      try {
+        const parsed = JSON.parse(savedPresets);
+        if (Array.isArray(parsed)) {
+          setActivePresets(parsed);
+        }
+      } catch {}
     }
     const savedCustom = await SecureStore.getItemAsync('angel_v2_custom_instructions');
     if (savedCustom) setAngelInstructions(savedCustom);

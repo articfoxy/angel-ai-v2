@@ -26,6 +26,9 @@ export function setupSocketHandlers(io: Server) {
 
     try {
       const payload = jwt.verify(token, JWT_SECRET) as { userId: string };
+      if ((payload as any).type === 'refresh') {
+        return next(new Error('Access token required'));
+      }
       socket.userId = payload.userId;
       next();
     } catch {
@@ -68,6 +71,7 @@ export function setupSocketHandlers(io: Server) {
 
     let angelProcessing = false; // Guard against concurrent angel:activate calls
     let angelThinkingTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastActivateTime = 0; // Timestamp-based rate limit for angel:activate
 
     /**
      * Handle a whisper from the Realtime API — execute any actions and emit to client.
@@ -345,6 +349,13 @@ export function setupSocketHandlers(io: Server) {
     // Angel manual activation — button press triggers immediate response via Realtime API
     socket.on('angel:activate', async () => {
       if (!currentSessionId || !socket.userId || angelProcessing) return;
+
+      // Rate limit: reject if called within 5 seconds of last activation
+      const now = Date.now();
+      if (now - lastActivateTime < 5000) {
+        return;
+      }
+      lastActivateTime = now;
       if (transcriptBuffer.length < 1) {
         socket.emit('whisper', {
           id: uuid(),

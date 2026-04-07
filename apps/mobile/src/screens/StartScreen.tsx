@@ -62,6 +62,7 @@ export function StartScreen() {
   const [angelThinking, setAngelThinking] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const debriefTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isStartingRef = useRef(false); // Double-tap guard for session creation
 
   // Keep refs so socket callbacks can read the latest values
   const isActiveRef = useRef(false);
@@ -168,7 +169,7 @@ export function StartScreen() {
     });
 
     sock.on('whisper', (data: WhisperCardData) => {
-      setWhisperCards((prev) => [data, ...prev]);
+      setWhisperCards((prev) => [data, ...prev].slice(0, 50));
     });
 
     sock.on('speaker:identified', (data: { speakerId: string; label: string }) => {
@@ -345,7 +346,9 @@ export function StartScreen() {
         },
       ]);
     } else {
-      // Start session
+      // Start session — guard against double-tap
+      if (isStartingRef.current) return;
+      isStartingRef.current = true;
       try {
         // Request microphone permission before anything else
         const hasPermission = await requestMicPermission();
@@ -450,6 +453,7 @@ export function StartScreen() {
             currentSocket.emit('audio', exactBuffer);
           }
         });
+        isStartingRef.current = false;
       } catch (err: any) {
         console.error('Failed to start session:', err);
         await stopRecording();
@@ -461,6 +465,7 @@ export function StartScreen() {
         setSessionId(null);
         setElapsed(0);
         startPayloadRef.current = null;
+        isStartingRef.current = false;
         Alert.alert(
           'Connection Failed',
           err?.message || 'Could not start session. Please check your connection and try again.'

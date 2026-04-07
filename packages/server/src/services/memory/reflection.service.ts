@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import OpenAI from 'openai';
 import { prisma } from '../../index';
 import { RetrievalService } from './retrieval.service';
@@ -87,7 +88,7 @@ Return JSON: { "reflections": [{ "content": "...", "importance": 7, "sourceMemor
           await prisma.$executeRawUnsafe(
             `INSERT INTO "Reflection" (id, "userId", content, embedding, importance, "sourceMemories", "createdAt")
              VALUES ($1, $2, $3, $4::vector, $5, $6, NOW())`,
-            crypto.randomUUID(),
+            randomUUID(),
             userId,
             reflection.content,
             embeddingStr,
@@ -129,9 +130,10 @@ Return JSON: { "reflections": [{ "content": "...", "importance": 7, "sourceMemor
       data: { validTo: new Date() },
     });
 
-    // Invalidate contradicted relationships
+    // Invalidate contradicted relationships — scoped to this user's entities
     await prisma.relationship.updateMany({
       where: {
+        from: { userId },
         validTo: null,
         weight: { lt: 0.1 },
       },
