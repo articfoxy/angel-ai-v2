@@ -124,7 +124,7 @@ export class RealtimeService {
       session: {
         modalities: ['text'],
         instructions: this.config.instructions,
-        temperature: 0.3,
+        temperature: 0.6,
         max_response_output_tokens: 300,
         tools: [
           {
