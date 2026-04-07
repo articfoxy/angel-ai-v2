@@ -47,8 +47,8 @@ export function SettingsScreen() {
 
   const loadVoiceprintStatus = React.useCallback(async () => {
     try {
-      const res = await api.get<{ data: { enrolled: boolean } }>('voiceprint/status');
-      setVoiceprintEnrolled(res?.data?.enrolled ?? false);
+      const res = await api.get<{ enrolled: boolean }>('voiceprint/status');
+      setVoiceprintEnrolled(res?.enrolled ?? false);
     } catch {}
   }, []);
 

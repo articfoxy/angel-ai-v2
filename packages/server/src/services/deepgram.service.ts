@@ -202,14 +202,15 @@ export class DeepgramService {
       }
     });
 
-    this.connection.on(LiveTranscriptionEvents.Error, async (err: any) => {
+    this.connection.on(LiveTranscriptionEvents.Error, (err: any) => {
       console.error('Deepgram error:', err);
+      // Don't call this.close() here — it sets sessionActive=false and prevents
+      // the Close event handler from triggering auto-reconnect.
+      // The Close event will fire after Error, and that's where reconnect happens.
+      // Only emit an informational error to the client.
       if (this.config.onError) {
         this.config.onError(`Deepgram streaming error: ${err?.message || 'unknown'}`);
       }
-      // Close the broken connection to prevent hanging state.
-      // Await to ensure pending episode writes are flushed.
-      await this.close();
     });
 
     this.connection.on(LiveTranscriptionEvents.Close, async () => {
@@ -352,6 +353,13 @@ export class DeepgramService {
     if (this.keepaliveTimer) { clearInterval(this.keepaliveTimer); this.keepaliveTimer = null; }
     if (this.connection) { try { this.connection.finish(); } catch {} this.connection = null; }
     this.ready = false;
+
+    // Reset speaker identification — Deepgram may re-assign speaker numbers
+    // on the new connection. The voiceprint matching will re-identify correctly.
+    this.ownerIdentified = false;
+    this.speakerCounts.clear();
+    this.speakerMap.clear();
+    this.speakerAudioBuffers.clear();
 
     for (let attempt = 1; attempt <= MAX_RECONNECT_ATTEMPTS; attempt++) {
       if (!this.sessionActive) break;

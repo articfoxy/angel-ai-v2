@@ -124,9 +124,11 @@ export function VoiceEnrollment({ enrolled, enrolledDate, onEnrollmentChange }: 
       offset += chunk.length;
     }
 
-    // Convert to base64 in chunks to avoid call stack overflow
+    // Convert to base64 in chunks to avoid call stack overflow.
+    // IMPORTANT: chunk size MUST be a multiple of 3, otherwise base64 padding
+    // at chunk boundaries corrupts the output when concatenated.
     let b64 = '';
-    const CHUNK_SIZE = 8192;
+    const CHUNK_SIZE = 8190; // 8190 / 3 = 2730 exactly — no padding issues
     for (let i = 0; i < combined.length; i += CHUNK_SIZE) {
       const slice = combined.subarray(i, Math.min(i + CHUNK_SIZE, combined.length));
       let binary = '';
