@@ -112,20 +112,25 @@ export class RetrievalService {
     }
 
     // 3. Include relevant reflections (only if budget remains)
+    // Wrapped in try-catch — Reflection table may not exist if migration hasn't run
     if (context.length < maxChars) {
-      const reflections = await prisma.reflection.findMany({
-        where: { userId },
-        orderBy: { importance: 'desc' },
-        take: 5,
-      });
-      if (reflections.length > 0) {
-        context += '## Insights\n';
-        for (const ref of reflections) {
-          const line = `- ${ref.content}\n`;
-          if (context.length + line.length > maxChars) break;
-          context += line;
+      try {
+        const reflections = await prisma.reflection.findMany({
+          where: { userId },
+          orderBy: { importance: 'desc' },
+          take: 5,
+        });
+        if (reflections.length > 0) {
+          context += '## Insights\n';
+          for (const ref of reflections) {
+            const line = `- ${ref.content}\n`;
+            if (context.length + line.length > maxChars) break;
+            context += line;
+          }
+          context += '\n';
         }
-        context += '\n';
+      } catch {
+        // Table may not exist yet — skip reflections
       }
     }
 

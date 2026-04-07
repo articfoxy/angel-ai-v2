@@ -145,7 +145,12 @@ Return JSON: { "reflections": [{ "content": "...", "importance": 7, "sourceMemor
  * Call this from the session end handler after extraction completes.
  */
 export async function runPostSessionReflection(userId: string): Promise<void> {
-  const service = new ReflectionService();
-  await service.maybeReflect(userId);
-  await service.maintain(userId);
+  try {
+    const service = new ReflectionService();
+    await service.maybeReflect(userId);
+    await service.maintain(userId);
+  } catch (err) {
+    // Non-fatal — reflection tables may not exist yet
+    console.warn('[reflection] Post-session reflection failed:', (err as any).code || err);
+  }
 }

@@ -206,9 +206,15 @@ export function setupSocketHandlers(io: Server) {
       }
 
       // Load voiceprint for owner identification (if enrolled)
-      const voiceprintRecord = await prisma.voiceprint.findUnique({
-        where: { userId: socket.userId },
-      });
+      // Wrapped in try-catch — table may not exist yet if migration hasn't run
+      let voiceprintRecord: any = null;
+      try {
+        voiceprintRecord = await prisma.voiceprint.findUnique({
+          where: { userId: socket.userId },
+        });
+      } catch (err) {
+        console.warn('[session] Voiceprint lookup failed (table may not exist):', (err as any).code);
+      }
 
       // Initialize Deepgram with diarization
       deepgram = new DeepgramService({
