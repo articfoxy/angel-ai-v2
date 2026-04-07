@@ -39,6 +39,17 @@ const ANGEL_INSTRUCTION_PRESETS = [
   { id: 'learn', label: 'Help me learn & remember key points', icon: '🧠' },
 ];
 
+const OWNER_LANGUAGES = [
+  { code: 'English', flag: '🇬🇧' },
+  { code: 'Chinese', flag: '🇨🇳' },
+  { code: 'Malay', flag: '🇲🇾' },
+  { code: 'Spanish', flag: '🇪🇸' },
+  { code: 'French', flag: '🇫🇷' },
+  { code: 'Japanese', flag: '🇯🇵' },
+  { code: 'Korean', flag: '🇰🇷' },
+  { code: 'Hindi', flag: '🇮🇳' },
+];
+
 const ENGLISH_LOCALES = [
   { code: 'en', label: 'General', flag: '🌐' },
   { code: 'en-US', label: 'US', flag: '🇺🇸' },
@@ -67,6 +78,7 @@ export function SettingsScreen() {
   const [keywordsText, setKeywordsText] = useState('');
   const [angelInstructions, setAngelInstructions] = useState('');
   const [activePresets, setActivePresets] = useState<string[]>([]);
+  const [ownerLanguage, setOwnerLanguage] = useState('English');
 
   const version = Constants.expoConfig?.version || '2.0.0';
   const buildNumber = Constants.expoConfig?.ios?.buildNumber || '';
@@ -89,6 +101,9 @@ export function SettingsScreen() {
     if (locale) setSpeechLocale(locale);
     const kw = await SecureStore.getItemAsync('angel_v2_speech_keywords');
     if (kw) setKeywordsText(kw);
+    // Load Owner Language
+    const savedOwnerLang = await SecureStore.getItemAsync('angel_v2_owner_language');
+    if (savedOwnerLang) setOwnerLanguage(savedOwnerLang);
     // Load Angel Instructions
     const savedPresets = await SecureStore.getItemAsync('angel_v2_instruction_presets');
     if (savedPresets) {
@@ -109,6 +124,11 @@ export function SettingsScreen() {
   const saveCustomInstructions = async () => {
     await SecureStore.setItemAsync('angel_v2_custom_instructions', angelInstructions);
     Alert.alert('Saved', 'Angel will use these instructions in your next session.');
+  };
+
+  const saveOwnerLanguage = async (lang: string) => {
+    setOwnerLanguage(lang);
+    await SecureStore.setItemAsync('angel_v2_owner_language', lang);
   };
 
   const saveSpeechLocale = async (locale: string) => {
@@ -351,6 +371,30 @@ export function SettingsScreen() {
         {/* Angel Instructions */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Angel Instructions</Text>
+          <View style={styles.card}>
+            <Text style={styles.cardLabel}>Owner Language</Text>
+            <Text style={styles.cardDesc}>Angel will always respond to you in this language.</Text>
+            <View style={styles.presetGrid}>
+              {OWNER_LANGUAGES.map((lang) => (
+                <TouchableOpacity
+                  key={lang.code}
+                  style={[
+                    styles.presetChip,
+                    ownerLanguage === lang.code && styles.presetChipActive,
+                  ]}
+                  onPress={() => saveOwnerLanguage(lang.code)}
+                >
+                  <Text style={styles.presetIcon}>{lang.flag}</Text>
+                  <Text style={[
+                    styles.presetLabel,
+                    ownerLanguage === lang.code && styles.presetLabelActive,
+                  ]} numberOfLines={1}>
+                    {lang.code}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
           <View style={styles.card}>
             <Text style={styles.cardLabel}>What should Angel help with?</Text>
             <Text style={styles.cardDesc}>Angel is always active — these instructions control when it speaks up.</Text>

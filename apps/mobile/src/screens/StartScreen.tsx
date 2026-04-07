@@ -420,6 +420,11 @@ export function StartScreen() {
           if (allInstructions) {
             startPayload.instructions = allInstructions;
           }
+          // Load owner language preference
+          const ownerLang = await SecureStore.getItemAsync('angel_v2_owner_language');
+          if (ownerLang) {
+            startPayload.ownerLanguage = ownerLang;
+          }
         } catch (instrErr) {
           console.warn('[session] Failed to load Angel instructions:', instrErr);
           // Non-fatal — session starts with default instructions

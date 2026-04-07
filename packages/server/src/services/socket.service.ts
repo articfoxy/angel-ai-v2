@@ -149,6 +149,7 @@ export function setupSocketHandlers(io: Server) {
       byok?: { provider: string; apiKey: string; model?: string };
       speech?: { language?: string; keywords?: string[] };
       instructions?: string;
+      ownerLanguage?: string;
     }) => {
       const { sessionId } = payload;
       if (!socket.userId) return;
@@ -176,9 +177,10 @@ export function setupSocketHandlers(io: Server) {
 
       if (openaiKey) {
         const userInstructions = payload.instructions || 'Help me with jargon and provide useful insights.';
+        const ownerLanguage = payload.ownerLanguage || 'English';
         realtime = new RealtimeService({
           apiKey: openaiKey,
-          instructions: buildAngelInstructions(userInstructions),
+          instructions: buildAngelInstructions(userInstructions, ownerLanguage),
           onWhisper: (whisper) => {
             handleRealtimeWhisper(userId, whisper).catch((err) => {
               console.error('[Realtime] Whisper handling error:', err);
