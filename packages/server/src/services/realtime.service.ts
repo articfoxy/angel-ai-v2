@@ -392,35 +392,41 @@ export class RealtimeService {
     try {
       // Extract JSON from potential markdown code blocks
       const jsonMatch = text.match(/\{[\s\S]*?\}/);
-      if (!jsonMatch) {
-        console.warn('[Realtime] No JSON found in response text');
-        return;
-      }
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed.skip) {
+          console.log('[Realtime] Model returned skip');
+          return;
+        }
 
-      const parsed = JSON.parse(jsonMatch[0]);
-      if (parsed.skip) {
-        console.log('[Realtime] Model returned skip');
-        return;
-      }
-
-      console.log('[Realtime] Emitting whisper:', parsed.type, parsed.content?.substring(0, 50));
-      this.config.onWhisper({
-        type: parsed.type || 'insight',
-        content: parsed.content || '',
-        detail: parsed.detail,
-        confidence: parsed.confidence,
-        action: parsed.action,
-        actionData: parsed.actionData,
-      });
-    } catch {
-      // Not valid JSON — might be a plain text response
-      if (text.trim() && !text.includes('"skip"')) {
-        console.log('[Realtime] Emitting plain text whisper');
+        console.log('[Realtime] Emitting whisper:', parsed.type, parsed.content?.substring(0, 50));
         this.config.onWhisper({
-          type: 'response',
-          content: text.trim().slice(0, 200),
+          type: parsed.type || 'insight',
+          content: parsed.content || '',
+          detail: parsed.detail,
+          confidence: parsed.confidence,
+          action: parsed.action,
+          actionData: parsed.actionData,
         });
+        return;
       }
+
+      // No JSON found — emit as plain text whisper
+      this.emitPlainTextWhisper(text);
+    } catch {
+      // JSON.parse failed — emit as plain text
+      this.emitPlainTextWhisper(text);
+    }
+  }
+
+  private emitPlainTextWhisper(text: string): void {
+    const trimmed = text.trim();
+    if (trimmed && !trimmed.includes('"skip"')) {
+      console.log('[Realtime] Emitting plain text whisper, length:', trimmed.length);
+      this.config.onWhisper({
+        type: 'insight',
+        content: trimmed.slice(0, 500),
+      });
     }
   }
 
