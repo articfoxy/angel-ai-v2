@@ -7,7 +7,9 @@ import {
   RefreshControl,
   ActivityIndicator,
   Alert,
+  TouchableOpacity,
 } from 'react-native';
+import Slider from '@react-native-community/slider';
 import * as Haptics from 'expo-haptics';
 import * as SecureStore from 'expo-secure-store';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -28,7 +30,7 @@ import { SessionCard } from '../components/SessionCard';
 import { useAuth } from '../hooks/useAuth';
 import { useApi } from '../hooks/useApi';
 import { connectSocket, disconnectSocket, getSocket, onSocketStateChange } from '../services/socket';
-import { requestMicPermission, startRecording, stopRecording } from '../services/audio';
+import { requestMicPermission, startRecording, stopRecording, setGain, getGain } from '../services/audio';
 import { api } from '../services/api';
 import { colors, spacing, fontSize, radius } from '../theme';
 import type { Session, SessionsListResponse, TranscriptSegment, WhisperCardData } from '../types';
@@ -54,6 +56,8 @@ export function StartScreen() {
   const [whisperCards, setWhisperCards] = useState<WhisperCardData[]>([]);
   const [speakerNames, setSpeakerNames] = useState<Record<string, string>>({});
   const [elapsed, setElapsed] = useState(0);
+  const [gain, setGainState] = useState(getGain());
+  const [showGain, setShowGain] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Keep refs so socket callbacks can read the latest values
@@ -408,9 +412,53 @@ export function StartScreen() {
           {/* Live Transcript */}
           <TranscriptView segments={segments} speakerNames={speakerNames} />
 
-          {/* Small stop button at bottom */}
+          {/* Bottom control bar */}
           <View style={styles.activeButtonRow}>
-            <AngelButton onPress={handleToggle} isActive={true} />
+            {/* Gain slider toggle */}
+            {showGain && (
+              <View style={styles.gainRow}>
+                <Ionicons name="mic-outline" size={16} color={colors.textSecondary} />
+                <Slider
+                  style={styles.gainSlider}
+                  minimumValue={0.5}
+                  maximumValue={5.0}
+                  step={0.5}
+                  value={gain}
+                  onValueChange={(v) => {
+                    setGainState(v);
+                    setGain(v);
+                  }}
+                  minimumTrackTintColor={colors.primary}
+                  maximumTrackTintColor={colors.border}
+                  thumbTintColor={colors.primary}
+                />
+                <Text style={styles.gainLabel}>{gain.toFixed(1)}×</Text>
+              </View>
+            )}
+            <View style={styles.bottomControls}>
+              <TouchableOpacity
+                onPress={() => setShowGain(!showGain)}
+                style={[
+                  styles.gainToggle,
+                  showGain && { backgroundColor: colors.primaryMuted },
+                ]}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons
+                  name="volume-high-outline"
+                  size={18}
+                  color={showGain ? colors.primary : colors.textSecondary}
+                />
+                <Text style={[
+                  styles.gainToggleText,
+                  showGain && { color: colors.primary },
+                ]}>
+                  {gain.toFixed(1)}×
+                </Text>
+              </TouchableOpacity>
+              <AngelButton onPress={handleToggle} isActive={true} />
+              <View style={{ width: 56 }} />
+            </View>
           </View>
         </View>
       ) : (
@@ -520,10 +568,49 @@ const styles = StyleSheet.create({
   activeContainer: { flex: 1 },
   whisperSection: { marginBottom: spacing.sm, marginTop: spacing.xs },
   activeButtonRow: {
-    paddingVertical: spacing.md,
-    alignItems: 'center',
+    paddingVertical: spacing.sm,
     borderTopWidth: 1,
     borderTopColor: colors.border,
+  },
+  bottomControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+  },
+  gainToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: spacing.xs + 2,
+    borderRadius: radius.full,
+    width: 56,
+  },
+  gainToggleText: {
+    color: colors.textSecondary,
+    fontSize: fontSize.xs,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'] as any,
+  },
+  gainRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
+    gap: spacing.sm,
+  },
+  gainSlider: {
+    flex: 1,
+    height: 32,
+  },
+  gainLabel: {
+    color: colors.text,
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'] as any,
+    width: 32,
+    textAlign: 'right',
   },
   idleContent: { paddingBottom: spacing.xxl },
   angelSection: {

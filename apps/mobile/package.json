@@ -9,10 +9,11 @@
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
-    "base-64": "^1.0.0",
+    "@react-native-community/slider": "^5.2.0",
     "@react-navigation/bottom-tabs": "^7.15.9",
     "@react-navigation/native": "^7.2.2",
     "@react-navigation/native-stack": "^7.14.10",
+    "base-64": "^1.0.0",
     "expo": "~54.0.33",
     "expo-apple-authentication": "~8.0.8",
     "expo-av": "~16.0.8",
