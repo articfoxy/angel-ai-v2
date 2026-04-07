@@ -67,17 +67,9 @@ export class DeepgramService {
     }
     const deepgram = createClient(apiKey);
 
-    // Deepgram may reject certain regional locale codes (e.g. en-SG).
-    // Fall back to base language if the full locale isn't widely supported.
-    let language = this.config.language || 'en';
-    if (language.includes('-')) {
-      const supported = new Set(['en-US','en-GB','en-AU','en-IN','en-NZ','es-419','fr-CA','pt-BR','zh-CN','zh-TW']);
-      if (!supported.has(language)) {
-        const base = language.split('-')[0];
-        console.log(`[Deepgram] Locale "${language}" not supported, using "${base}"`);
-        language = base;
-      }
-    }
+    // Use multilingual mode so Deepgram transcribes all languages (English, Chinese, etc.)
+    // The user's locale preference is ignored — 'multi' handles everything.
+    const language = 'multi';
 
     const dgOptions: Record<string, unknown> = {
       model: 'nova-3',
