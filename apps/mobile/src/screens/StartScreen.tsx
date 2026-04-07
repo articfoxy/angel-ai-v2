@@ -391,6 +391,26 @@ export function StartScreen() {
           };
         }
 
+        // Load Angel Instructions (presets + custom)
+        const presetsRaw = await SecureStore.getItemAsync('angel_v2_instruction_presets');
+        const customInstructions = await SecureStore.getItemAsync('angel_v2_custom_instructions');
+        const PRESET_MAP: Record<string, string> = {
+          jargon: 'Explain any jargon, acronyms, or technical terms used in the conversation.',
+          translate_zh: 'When someone speaks Chinese (Mandarin/Cantonese), translate it to English for me.',
+          translate_es: 'When someone speaks Spanish, translate it to English for me.',
+          meeting: 'Track action items, decisions, and key takeaways from the conversation.',
+          coach: 'Give me tips on my communication — tone, clarity, persuasiveness.',
+          fact_check: 'Flag any inaccuracies, contradictions, or questionable claims.',
+          sales: 'Help me navigate the sales conversation — objection handling, closing techniques, value framing.',
+          learn: 'Help me learn from the conversation — summarize key points, explain concepts, suggest follow-ups.',
+        };
+        const presetIds: string[] = presetsRaw ? JSON.parse(presetsRaw) : [];
+        const presetTexts = presetIds.map(id => PRESET_MAP[id]).filter(Boolean);
+        const allInstructions = [...presetTexts, customInstructions?.trim()].filter(Boolean).join('\n');
+        if (allInstructions) {
+          startPayload.instructions = allInstructions;
+        }
+
         socket.emit('session:start', startPayload);
 
         // Register all session-specific listeners (removes stale ones first)

@@ -3,13 +3,12 @@ import jwt from 'jsonwebtoken';
 import { v4 as uuid } from 'uuid';
 import { prisma } from '../index';
 import { DeepgramService } from './deepgram.service';
-import { InferenceService } from './inference.service';
 import { SearchService } from './search.service';
+import { RealtimeService, buildAngelInstructions } from './realtime.service';
 import { ExtractionService } from './memory/extraction.service';
 import { runPostSessionReflection } from './memory/reflection.service';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
-const WHISPER_INTERVAL_MS = 10000; // Generate whisper every 10s
 const MAX_SESSION_DURATION_MS = 7_200_000; // 2 hours
 const IDLE_TIMEOUT_MS = 300_000; // 5 minutes with no new transcript
 
@@ -17,14 +16,7 @@ interface AuthenticatedSocket extends Socket {
   userId?: string;
 }
 
-interface InferenceConfig {
-  provider: 'openai' | 'anthropic' | 'google';
-  apiKey: string;
-  model?: string;
-}
-
 export function setupSocketHandlers(io: Server) {
-  const inference = new InferenceService();
   const search = new SearchService();
 
   // Auth middleware
@@ -44,17 +36,13 @@ export function setupSocketHandlers(io: Server) {
   io.on('connection', (socket: AuthenticatedSocket) => {
     console.log(`Client connected: ${socket.userId}`);
     let deepgram: DeepgramService | null = null;
+    let realtime: RealtimeService | null = null;
     let transcriptBuffer: string[] = [];
-    let whisperTimer: ReturnType<typeof setInterval> | null = null;
     let sessionTimer: ReturnType<typeof setTimeout> | null = null;
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
     let currentSessionId: string | null = null;
 
     function clearAllTimers() {
-      if (whisperTimer) {
-        clearInterval(whisperTimer);
-        whisperTimer = null;
-      }
       if (sessionTimer) {
         clearTimeout(sessionTimer);
         sessionTimer = null;
@@ -78,57 +66,16 @@ export function setupSocketHandlers(io: Server) {
       }, IDLE_TIMEOUT_MS);
     }
 
-    let byokConfig: InferenceConfig | undefined;
-    let recentWhisperContents: string[] = []; // Track last 10 whispers to avoid duplicates
     let angelProcessing = false; // Guard against concurrent angel:activate calls
-    let sessionSkillsCache: string[] = []; // Cache skills for angel:activate
 
     /**
-     * Core whisper generation + action execution + emit.
-     * Shared between the periodic timer and angel:activate.
-     * @param userId - Owner's user ID
-     * @param transcript - The transcript text to analyze
-     * @param skills - Active session skills
-     * @param isActivation - True if triggered by angel:activate (skips dedup for the first response)
+     * Handle a whisper from the Realtime API — execute any actions and emit to client.
      */
-    async function generateAndEmitWhisper(
+    async function handleRealtimeWhisper(
       userId: string,
-      transcript: string,
-      skills: string[],
-      isActivation = false
+      whisper: { type: string; content: string; detail?: string; confidence?: number; action?: 'save_memory' | 'web_search'; actionData?: Record<string, unknown> }
     ): Promise<void> {
-      const whisper = await inference.generateWhisper(
-        userId,
-        transcript,
-        byokConfig,
-        skills,
-        recentWhisperContents
-      );
-
-      if (!whisper) {
-        // If this was a manual activation and no whisper was generated, send a "nothing to add" response
-        if (isActivation) {
-          socket.emit('whisper', {
-            id: uuid(),
-            type: 'response',
-            content: 'Nothing new to add right now. Keep talking and I\'ll jump in when I can help.',
-            createdAt: new Date().toISOString(),
-          });
-        }
-        return;
-      }
-
-      // Dedup: skip if we already whispered something very similar (except for activations)
-      const contentKey = whisper.content.toLowerCase().slice(0, 60);
-      if (!isActivation && recentWhisperContents.some(prev => prev === contentKey)) {
-        return;
-      }
-      recentWhisperContents.push(contentKey);
-      if (recentWhisperContents.length > 10) {
-        recentWhisperContents = recentWhisperContents.slice(-10);
-      }
-
-      // Execute actions if the LLM returned a command
+      // Execute actions if the model returned a command
       if (whisper.action === 'save_memory' && whisper.actionData) {
         try {
           await prisma.memory.create({
@@ -173,29 +120,17 @@ export function setupSocketHandlers(io: Server) {
       socket.emit('whisper', card);
     }
 
-    function startWhisperTimer(userId: string, sessionSkills: string[]) {
-      sessionSkillsCache = sessionSkills; // Cache for angel:activate
-      if (whisperTimer) return; // Already running
-      whisperTimer = setInterval(async () => {
-        if (transcriptBuffer.length < 2) return;
-
-        const recentTranscript = transcriptBuffer.slice(-20).join('\n');
-        try {
-          await generateAndEmitWhisper(userId, recentTranscript, sessionSkills);
-        } catch (err) {
-          console.error('Whisper generation error:', err);
-        }
-      }, WHISPER_INTERVAL_MS);
-    }
-
     async function cleanupSession() {
       clearAllTimers();
+      if (realtime) {
+        await realtime.close();
+        realtime = null;
+      }
       if (deepgram) {
         await deepgram.close();
         deepgram = null;
       }
       transcriptBuffer = [];
-      recentWhisperContents = [];
       currentSessionId = null;
     }
 
@@ -203,6 +138,7 @@ export function setupSocketHandlers(io: Server) {
       sessionId: string;
       byok?: { provider: string; apiKey: string; model?: string };
       speech?: { language?: string; keywords?: string[] };
+      instructions?: string;
     }) => {
       const { sessionId } = payload;
       if (!socket.userId) return;
@@ -212,27 +148,51 @@ export function setupSocketHandlers(io: Server) {
       });
       if (!session) return;
 
-      // Guard: if a Deepgram connection already exists (e.g., rapid reconnect),
-      // clean it up before creating a new one to prevent orphaned connections.
-      if (deepgram) {
-        console.log(`[session] Cleaning up existing Deepgram connection before re-start for session ${sessionId}`);
+      // Guard: if connections already exist (e.g., rapid reconnect),
+      // clean them up before creating new ones to prevent orphaned connections.
+      if (deepgram || realtime) {
+        console.log(`[session] Cleaning up existing connections before re-start for session ${sessionId}`);
         await cleanupSession();
-      }
-
-      // Store BYOK config if client provided it
-      if (payload.byok?.apiKey) {
-        byokConfig = {
-          provider: (payload.byok.provider as 'openai' | 'anthropic' | 'google') || 'openai',
-          apiKey: payload.byok.apiKey,
-          model: payload.byok.model,
-        };
-      } else {
-        byokConfig = undefined;
       }
 
       transcriptBuffer = [];
       currentSessionId = sessionId;
       const userId = socket.userId;
+
+      // Initialize OpenAI Realtime API for always-active Angel
+      const openaiKey = payload.byok?.provider === 'openai' && payload.byok?.apiKey
+        ? payload.byok.apiKey
+        : process.env.OPENAI_API_KEY || '';
+
+      if (openaiKey) {
+        const userInstructions = payload.instructions || 'Help me with jargon and provide useful insights.';
+        realtime = new RealtimeService({
+          apiKey: openaiKey,
+          instructions: buildAngelInstructions(userInstructions),
+          onWhisper: (whisper) => {
+            handleRealtimeWhisper(userId, whisper).catch((err) => {
+              console.error('[Realtime] Whisper handling error:', err);
+            });
+          },
+          onError: (error) => {
+            console.error('[Realtime] Error:', error);
+          },
+          onStatus: (status) => {
+            console.log(`[Realtime] Status: ${status}`);
+          },
+        });
+
+        try {
+          await realtime.connect();
+          console.log(`[session] Realtime API connected for session ${sessionId}`);
+        } catch (err) {
+          console.error('[session] Realtime API connection failed:', err);
+          // Non-fatal — session continues with Deepgram only, no AI whispers
+          realtime = null;
+        }
+      } else {
+        console.warn('[session] No OpenAI API key — Realtime AI whispers disabled');
+      }
 
       // Load voiceprint for owner identification (if enrolled)
       const voiceprintRecord = await prisma.voiceprint.findUnique({
@@ -255,8 +215,10 @@ export function setupSocketHandlers(io: Server) {
               transcriptBuffer = transcriptBuffer.slice(-40);
             }
 
-            // Start whisper timer on first real transcript segment (lazy start)
-            startWhisperTimer(userId, session.skills);
+            // Feed transcript to Realtime API (always-active Angel)
+            if (realtime) {
+              realtime.feedTranscript(`[${label}]: ${data.text}`);
+            }
 
             // Voice wake word detection: "hi angel", "hey angel", "yo angel", "ok angel"
             if (label === 'Owner') {
@@ -267,16 +229,21 @@ export function setupSocketHandlers(io: Server) {
                 angelProcessing = true;
                 socket.emit('angel:thinking', { active: true });
 
-                // Small delay to let the owner finish their sentence
+                // Small delay to let the owner finish their sentence, then force respond
                 setTimeout(async () => {
                   try {
-                    const recentTranscript = transcriptBuffer.slice(-15).join('\n');
-                    await generateAndEmitWhisper(userId, recentTranscript, session.skills, true);
+                    if (realtime) {
+                      realtime.forceRespond();
+                    }
                   } catch (err) {
                     console.error('[agent] Wake word response error:', err);
                   } finally {
-                    angelProcessing = false;
-                    socket.emit('angel:thinking', { active: false });
+                    // forceRespond is async via WebSocket — thinking indicator
+                    // will be cleared when the whisper card is emitted
+                    setTimeout(() => {
+                      angelProcessing = false;
+                      socket.emit('angel:thinking', { active: false });
+                    }, 5000); // Max 5s thinking indicator
                   }
                 }, 2000); // 2s delay to capture the full sentence after the wake word
               }
@@ -354,7 +321,7 @@ export function setupSocketHandlers(io: Server) {
       }
     });
 
-    // Angel manual activation — button press triggers immediate whisper from last ~100 words
+    // Angel manual activation — button press triggers immediate response via Realtime API
     socket.on('angel:activate', async () => {
       if (!currentSessionId || !socket.userId || angelProcessing) return;
       if (transcriptBuffer.length < 1) {
@@ -371,16 +338,25 @@ export function setupSocketHandlers(io: Server) {
       socket.emit('angel:thinking', { active: true });
 
       try {
-        // Take last ~100 words (roughly last 10-15 transcript lines)
-        const recentLines = transcriptBuffer.slice(-15);
-        const recentTranscript = recentLines.join('\n');
-
-        await generateAndEmitWhisper(
-          socket.userId,
-          recentTranscript,
-          sessionSkillsCache,
-          true // isActivation — always respond even if nothing major
-        );
+        if (realtime) {
+          realtime.forceRespond();
+          // forceRespond triggers async response via WebSocket
+          // Set a max timeout to clear thinking indicator
+          setTimeout(() => {
+            angelProcessing = false;
+            socket.emit('angel:thinking', { active: false });
+          }, 8000);
+        } else {
+          // No Realtime connection — fallback message
+          socket.emit('whisper', {
+            id: uuid(),
+            type: 'warning',
+            content: 'Angel AI is not connected. Check your API key in settings.',
+            createdAt: new Date().toISOString(),
+          });
+          angelProcessing = false;
+          socket.emit('angel:thinking', { active: false });
+        }
       } catch (err) {
         console.error('[angel:activate] Error:', err);
         socket.emit('whisper', {
@@ -389,15 +365,20 @@ export function setupSocketHandlers(io: Server) {
           content: 'Something went wrong. Try again in a moment.',
           createdAt: new Date().toISOString(),
         });
-      } finally {
         angelProcessing = false;
         socket.emit('angel:thinking', { active: false });
       }
     });
 
     socket.on('session:stop', async ({ sessionId }: { sessionId: string }) => {
-      // Clean up timers and Deepgram
+      // Clean up timers, Realtime, and Deepgram
       clearAllTimers();
+
+      // Close Realtime API connection
+      if (realtime) {
+        await realtime.close();
+        realtime = null;
+      }
 
       // Grab speakers before closing Deepgram
       const speakers = deepgram ? deepgram.getSpeakers() : {};
@@ -452,7 +433,6 @@ export function setupSocketHandlers(io: Server) {
       }
 
       transcriptBuffer = [];
-      recentWhisperContents = [];
       currentSessionId = null;
       console.log(`Session stopped: ${sessionId}`);
     });

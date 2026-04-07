@@ -28,6 +28,28 @@ const API_KEY_STORAGE = {
 
 type ModelProvider = 'openai' | 'anthropic' | 'google';
 
+const ANGEL_INSTRUCTION_PRESETS = [
+  { id: 'jargon', label: 'Explain jargon & acronyms', icon: '📖' },
+  { id: 'translate_zh', label: 'Translate Chinese to English', icon: '🇨🇳' },
+  { id: 'translate_es', label: 'Translate Spanish to English', icon: '🇪🇸' },
+  { id: 'meeting', label: 'Track action items & decisions', icon: '📋' },
+  { id: 'coach', label: 'Coach my communication style', icon: '🎯' },
+  { id: 'fact_check', label: 'Flag inaccuracies & contradictions', icon: '⚠️' },
+  { id: 'sales', label: 'Help me close the deal', icon: '💰' },
+  { id: 'learn', label: 'Help me learn & remember key points', icon: '🧠' },
+];
+
+const PRESET_INSTRUCTIONS: Record<string, string> = {
+  jargon: 'Explain any jargon, acronyms, or technical terms used in the conversation.',
+  translate_zh: 'When someone speaks Chinese (Mandarin/Cantonese), translate it to English for me.',
+  translate_es: 'When someone speaks Spanish, translate it to English for me.',
+  meeting: 'Track action items, decisions, and key takeaways from the conversation.',
+  coach: 'Give me tips on my communication — tone, clarity, persuasiveness.',
+  fact_check: 'Flag any inaccuracies, contradictions, or questionable claims.',
+  sales: 'Help me navigate the sales conversation — objection handling, closing techniques, value framing.',
+  learn: 'Help me learn from the conversation — summarize key points, explain concepts, suggest follow-ups.',
+};
+
 const ENGLISH_LOCALES = [
   { code: 'en', label: 'General', flag: '🌐' },
   { code: 'en-US', label: 'US', flag: '🇺🇸' },
@@ -54,6 +76,8 @@ export function SettingsScreen() {
   const [voiceprintEnrolled, setVoiceprintEnrolled] = useState(false);
   const [speechLocale, setSpeechLocale] = useState('en');
   const [keywordsText, setKeywordsText] = useState('');
+  const [angelInstructions, setAngelInstructions] = useState('');
+  const [activePresets, setActivePresets] = useState<string[]>([]);
 
   const version = Constants.expoConfig?.version || '2.0.0';
   const buildNumber = Constants.expoConfig?.ios?.buildNumber || '';
@@ -76,6 +100,26 @@ export function SettingsScreen() {
     if (locale) setSpeechLocale(locale);
     const kw = await SecureStore.getItemAsync('angel_v2_speech_keywords');
     if (kw) setKeywordsText(kw);
+    // Load Angel Instructions
+    const savedPresets = await SecureStore.getItemAsync('angel_v2_instruction_presets');
+    if (savedPresets) {
+      try { setActivePresets(JSON.parse(savedPresets)); } catch {}
+    }
+    const savedCustom = await SecureStore.getItemAsync('angel_v2_custom_instructions');
+    if (savedCustom) setAngelInstructions(savedCustom);
+  };
+
+  const togglePreset = async (presetId: string) => {
+    const updated = activePresets.includes(presetId)
+      ? activePresets.filter(p => p !== presetId)
+      : [...activePresets, presetId];
+    setActivePresets(updated);
+    await SecureStore.setItemAsync('angel_v2_instruction_presets', JSON.stringify(updated));
+  };
+
+  const saveCustomInstructions = async () => {
+    await SecureStore.setItemAsync('angel_v2_custom_instructions', angelInstructions);
+    Alert.alert('Saved', 'Angel will use these instructions in your next session.');
   };
 
   const saveSpeechLocale = async (locale: string) => {
@@ -313,6 +357,54 @@ export function SettingsScreen() {
               </Text>
             </View>
           )}
+        </View>
+
+        {/* Angel Instructions */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Angel Instructions</Text>
+          <View style={styles.card}>
+            <Text style={styles.cardLabel}>What should Angel help with?</Text>
+            <Text style={styles.cardDesc}>Angel is always active — these instructions control when it speaks up.</Text>
+            <View style={styles.presetGrid}>
+              {ANGEL_INSTRUCTION_PRESETS.map((preset) => (
+                <TouchableOpacity
+                  key={preset.id}
+                  style={[
+                    styles.presetChip,
+                    activePresets.includes(preset.id) && styles.presetChipActive,
+                  ]}
+                  onPress={() => togglePreset(preset.id)}
+                >
+                  <Text style={styles.presetIcon}>{preset.icon}</Text>
+                  <Text style={[
+                    styles.presetLabel,
+                    activePresets.includes(preset.id) && styles.presetLabelActive,
+                  ]} numberOfLines={1}>
+                    {preset.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
+          <View style={styles.card}>
+            <Text style={styles.cardLabel}>Custom Instructions</Text>
+            <Text style={styles.cardDesc}>Add anything else you want Angel to do during conversations.</Text>
+            <TextInput
+              style={styles.keywordsInput}
+              value={angelInstructions}
+              onChangeText={setAngelInstructions}
+              placeholder={"e.g. Remind me to follow up on pricing\nAlert me if anyone mentions deadlines"}
+              placeholderTextColor={colors.textTertiary}
+              multiline
+              numberOfLines={4}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TouchableOpacity style={styles.saveKeyButton} onPress={saveCustomInstructions}>
+              <Text style={styles.saveKeyText}>Save Instructions</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Voice Identity */}
@@ -564,6 +656,30 @@ const styles = StyleSheet.create({
     borderColor: colors.danger + '30',
   },
   deleteAccountText: { color: colors.danger, fontSize: fontSize.md, fontWeight: '600' },
+  presetGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  presetChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: spacing.xs + 4,
+    borderRadius: 20,
+    backgroundColor: colors.surfaceHover,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  presetChipActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryMuted,
+  },
+  presetIcon: { fontSize: 14 },
+  presetLabel: { color: colors.textSecondary, fontSize: fontSize.xs, fontWeight: '600', flexShrink: 1 },
+  presetLabelActive: { color: colors.primary },
   localeGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
