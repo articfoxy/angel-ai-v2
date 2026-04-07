@@ -1,6 +1,7 @@
 import { createClient, LiveTranscriptionEvents } from '@deepgram/sdk';
 import { v4 as uuid } from 'uuid';
 import { prisma } from '../index';
+import { extractAveragedFeatures, cosineSimilarity, type AudioFeatures } from './audio-features.service';
 
 interface DeepgramConfig {
   onTranscript: (data: {
@@ -13,12 +14,18 @@ interface DeepgramConfig {
   }) => void;
   onSpeakerIdentified: (speakerId: string, label: string) => void;
   onError?: (error: string) => void;
+  onConnectionStatus?: (status: 'connected' | 'reconnecting' | 'disconnected') => void;
+  voiceprint?: any | null;  // AudioFeatures from voiceprint enrollment
   sessionId: string;
   userId: string;
 }
 
 const CONNECTION_TIMEOUT_MS = 5000;
 const MAX_BUFFERED_CHUNKS = 10;
+const HEARTBEAT_INTERVAL_MS = 10_000;
+const HEARTBEAT_STALE_MS = 30_000;
+const MAX_RECONNECT_ATTEMPTS = 5;
+const RECONNECT_DELAY_MS = 1000;
 
 /** Deepgram closes idle connections after ~10s of silence. Send keepalive every 5s. */
 const KEEPALIVE_INTERVAL_MS = 5000;
@@ -35,6 +42,13 @@ export class DeepgramService {
   private pendingWrites: Promise<any>[] = [];
   private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
   private lastAudioTime: number = 0;
+  private reconnecting = false;
+  private reconnectAttempts = 0;
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private lastTranscriptTime: number = 0;
+  private sessionActive = true;
+  private speakerAudioBuffers: Map<number, Buffer[]> = new Map();
+  private audioTimestamps: { buffer: Buffer; timestamp: number }[] = [];
 
   constructor(config: DeepgramConfig) {
     this.config = config;
@@ -100,6 +114,9 @@ export class DeepgramService {
           }
         }, KEEPALIVE_INTERVAL_MS);
 
+        this.startHeartbeat();
+        this.config.onConnectionStatus?.('connected');
+
         resolve();
       });
 
@@ -111,6 +128,7 @@ export class DeepgramService {
     });
 
     this.connection.on(LiveTranscriptionEvents.Transcript, (data: any) => {
+      this.lastTranscriptTime = Date.now();
       const transcript = data.channel?.alternatives?.[0];
       if (!transcript?.transcript) return;
 
@@ -129,6 +147,21 @@ export class DeepgramService {
           if (totalCount >= 10) {
             this.identifyOwner();
           }
+        }
+      }
+
+      // Buffer audio for voiceprint matching
+      if (isFinal && speaker !== undefined && this.config.voiceprint) {
+        const segStart = this.sessionStartTime + (data.start ?? 0) * 1000;
+        const segEnd = segStart + (data.duration ?? 0) * 1000;
+        const segmentAudio = this.audioTimestamps
+          .filter(a => a.timestamp >= segStart - 500 && a.timestamp <= segEnd + 500)
+          .map(a => a.buffer);
+        if (segmentAudio.length > 0) {
+          if (!this.speakerAudioBuffers.has(speaker)) {
+            this.speakerAudioBuffers.set(speaker, []);
+          }
+          this.speakerAudioBuffers.get(speaker)!.push(...segmentAudio);
         }
       }
 
@@ -178,9 +211,34 @@ export class DeepgramService {
       // Await to ensure pending episode writes are flushed.
       await this.close();
     });
+
+    this.connection.on(LiveTranscriptionEvents.Close, async () => {
+      console.warn(`[Deepgram] Connection closed for session ${this.config.sessionId}`);
+      this.ready = false;
+      if (this.sessionActive && !this.reconnecting) {
+        this.config.onConnectionStatus?.('reconnecting');
+        await this.attemptReconnect();
+      }
+    });
+
+    this.connection.on(LiveTranscriptionEvents.Unhandled, (data: any) => {
+      console.warn(`[Deepgram] Unhandled event for session ${this.config.sessionId}:`, data);
+    });
+
+    this.connection.on(LiveTranscriptionEvents.Metadata, () => {
+      this.lastTranscriptTime = Date.now();
+    });
   }
 
   private identifyOwner() {
+    if (this.config.voiceprint) {
+      this.identifyOwnerHybrid();
+    } else {
+      this.identifyOwnerByFrequency();
+    }
+  }
+
+  private identifyOwnerByFrequency() {
     let maxSpeaker = 0;
     let maxCount = 0;
 
@@ -209,6 +267,52 @@ export class DeepgramService {
     this.ownerIdentified = true;
   }
 
+  private identifyOwnerHybrid() {
+    const scores: Map<number, number> = new Map();
+    let totalCount = 0;
+    this.speakerCounts.forEach(c => totalCount += c);
+
+    this.speakerCounts.forEach((count, speaker) => {
+      const frequency = count / totalCount;
+      let similarity = 0;
+      const audioBuffers = this.speakerAudioBuffers.get(speaker);
+      if (audioBuffers && audioBuffers.length >= 3 && this.config.voiceprint) {
+        try {
+          const frames = audioBuffers.slice(0, 20);
+          const speakerFeatures = extractAveragedFeatures(frames);
+          similarity = cosineSimilarity(speakerFeatures, this.config.voiceprint);
+        } catch (err) {
+          console.warn(`[Deepgram] Feature extraction failed for speaker ${speaker}:`, err);
+        }
+      }
+      const confidence = Math.min(count / 10, 1.0);
+      const score = 0.6 * similarity + 0.3 * confidence + 0.1 * frequency;
+      scores.set(speaker, score);
+    });
+
+    let maxSpeaker = 0, maxScore = -1;
+    scores.forEach((score, speaker) => {
+      if (score > maxScore) { maxScore = score; maxSpeaker = speaker; }
+    });
+
+    console.log(`[Deepgram] Hybrid owner ID - scores:`, Object.fromEntries(scores), `winner: speaker_${maxSpeaker}`);
+
+    this.speakerMap.set(maxSpeaker, 'Owner');
+    this.config.onSpeakerIdentified(`speaker_${maxSpeaker}`, 'Owner');
+
+    const letters = ['A', 'B', 'C', 'D', 'E'];
+    let letterIdx = 0;
+    this.speakerCounts.forEach((_, speaker) => {
+      if (speaker !== maxSpeaker) {
+        const label = `Person ${letters[letterIdx] || String(letterIdx)}`;
+        this.speakerMap.set(speaker, label);
+        this.config.onSpeakerIdentified(`speaker_${speaker}`, label);
+        letterIdx++;
+      }
+    });
+    this.ownerIdentified = true;
+  }
+
   private getSpeakerLabel(speaker?: number): string | undefined {
     if (speaker === undefined) return undefined;
     return this.speakerMap.get(speaker) || `Speaker ${speaker}`;
@@ -227,6 +331,10 @@ export class DeepgramService {
 
     this.lastAudioTime = Date.now();
 
+    this.audioTimestamps.push({ buffer: data, timestamp: Date.now() });
+    const cutoff = Date.now() - 60_000;
+    this.audioTimestamps = this.audioTimestamps.filter(a => a.timestamp > cutoff);
+
     if (this.ready) {
       this.connection.send(data);
     } else if (this.audioBuffer.length < MAX_BUFFERED_CHUNKS) {
@@ -234,6 +342,56 @@ export class DeepgramService {
       this.audioBuffer.push(data);
     }
     // Chunks beyond the buffer limit are dropped to avoid unbounded memory growth
+  }
+
+  private async attemptReconnect(): Promise<void> {
+    if (this.reconnecting || !this.sessionActive) return;
+    this.reconnecting = true;
+    this.stopHeartbeat();
+
+    if (this.keepaliveTimer) { clearInterval(this.keepaliveTimer); this.keepaliveTimer = null; }
+    if (this.connection) { try { this.connection.finish(); } catch {} this.connection = null; }
+    this.ready = false;
+
+    for (let attempt = 1; attempt <= MAX_RECONNECT_ATTEMPTS; attempt++) {
+      if (!this.sessionActive) break;
+      const delay = RECONNECT_DELAY_MS * Math.pow(2, attempt - 1);
+      console.log(`[Deepgram] Reconnect attempt ${attempt}/${MAX_RECONNECT_ATTEMPTS} for session ${this.config.sessionId} (delay: ${delay}ms)`);
+      await new Promise(r => setTimeout(r, delay));
+      if (!this.sessionActive) break;
+      try {
+        await this.connect();
+        this.reconnecting = false;
+        this.reconnectAttempts = 0;
+        this.config.onConnectionStatus?.('connected');
+        console.log(`[Deepgram] Reconnected successfully for session ${this.config.sessionId}`);
+        return;
+      } catch (err) {
+        console.error(`[Deepgram] Reconnect attempt ${attempt} failed:`, err);
+      }
+    }
+    this.reconnecting = false;
+    this.config.onConnectionStatus?.('disconnected');
+    this.config.onError?.('Transcription connection lost. Please restart the session.');
+  }
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.lastTranscriptTime = Date.now();
+    this.heartbeatTimer = setInterval(() => {
+      if (!this.sessionActive || !this.ready || this.reconnecting) return;
+      const silenceSinceTranscript = Date.now() - this.lastTranscriptTime;
+      const audioFlowing = (Date.now() - this.lastAudioTime) < 5000;
+      if (silenceSinceTranscript > HEARTBEAT_STALE_MS && audioFlowing) {
+        console.warn(`[Deepgram] Heartbeat: no transcript for ${silenceSinceTranscript}ms despite audio flowing. Reconnecting.`);
+        this.config.onConnectionStatus?.('reconnecting');
+        this.attemptReconnect();
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
   }
 
   /**
@@ -249,6 +407,9 @@ export class DeepgramService {
   }
 
   async close(): Promise<void> {
+    this.sessionActive = false;
+    this.stopHeartbeat();
+
     // Stop keepalive first
     if (this.keepaliveTimer) {
       clearInterval(this.keepaliveTimer);

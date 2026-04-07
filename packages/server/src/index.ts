@@ -10,6 +10,7 @@ import { authRouter } from './routes/auth';
 import { sessionsRouter } from './routes/sessions';
 import { memoryRouter } from './routes/memory';
 import { skillsRouter } from './routes/skills';
+import { voiceprintRouter } from './routes/voiceprint';
 import { authenticateToken } from './middleware/auth';
 import { setupSocketHandlers } from './services/socket.service';
 
@@ -25,7 +26,7 @@ const io = new SocketServer(server, {
 });
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 
 // Health check
 app.get('/health', (_, res) => res.json({ status: 'ok', version: '2.0.0' }));
@@ -51,6 +52,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/sessions', authenticateToken, sessionsRouter);
 app.use('/api/memory', authenticateToken, memoryRouter);
 app.use('/api/skills', authenticateToken, skillsRouter);
+app.use('/api/voiceprint', authenticateToken, voiceprintRouter);
 
 // Socket.io
 setupSocketHandlers(io);

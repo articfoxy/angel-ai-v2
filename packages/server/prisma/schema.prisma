@@ -30,6 +30,7 @@ model User {
   reflections Reflection[]
   coreMemory  CoreMemory?
   skills      Skill[]
+  voiceprint  Voiceprint?
 }
 
 model Session {
@@ -187,4 +188,18 @@ model Skill {
 
   @@index([userId])
   @@index([visibility])
+}
+
+// ============================================
+// Voiceprint (speaker verification)
+// ============================================
+
+model Voiceprint {
+  id          String   @id @default(uuid())
+  userId      String   @unique
+  features    Json
+  sampleCount Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

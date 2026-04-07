@@ -153,6 +153,11 @@ export function setupSocketHandlers(io: Server) {
       currentSessionId = sessionId;
       const userId = socket.userId;
 
+      // Load voiceprint for owner identification (if enrolled)
+      const voiceprintRecord = await prisma.voiceprint.findUnique({
+        where: { userId: socket.userId },
+      });
+
       // Initialize Deepgram with diarization
       deepgram = new DeepgramService({
         onTranscript: (data) => {
@@ -179,6 +184,10 @@ export function setupSocketHandlers(io: Server) {
         onError: (errorMsg) => {
           socket.emit('session:error', { sessionId, message: errorMsg });
         },
+        onConnectionStatus: (status) => {
+          socket.emit('deepgram:status', { sessionId, status });
+        },
+        voiceprint: voiceprintRecord?.features ?? null,
         sessionId,
         userId,
       });

@@ -43,6 +43,7 @@ const SESSION_EVENTS = [
   'session:debrief',
   'session:timeout',
   'session:error',
+  'deepgram:status',
 ] as const;
 
 export function StartScreen() {
@@ -206,6 +207,15 @@ export function StartScreen() {
       disconnectSocket();
       refetchSessions();
       Alert.alert('Session Ended', data.message || 'Session timed out');
+    });
+
+    sock.on('deepgram:status', (data: { status: string }) => {
+      if (data.status === 'reconnecting') {
+        setIsReconnecting(true);
+      } else if (data.status === 'connected') {
+        setIsReconnecting(false);
+      }
+      // 'disconnected' status will be followed by session:error
     });
 
     sock.on('session:error', (data: { message: string }) => {

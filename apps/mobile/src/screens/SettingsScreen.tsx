@@ -17,6 +17,7 @@ import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import { useAuth } from '../hooks/useAuth';
 import { api } from '../services/api';
+import { VoiceEnrollment } from '../components/VoiceEnrollment';
 import { colors, spacing, fontSize } from '../theme';
 
 const API_KEY_STORAGE = {
@@ -39,13 +40,22 @@ export function SettingsScreen() {
   const [showKeys, setShowKeys] = useState(false);
   const [byok, setByok] = useState(false);
   const [testingKey, setTestingKey] = useState<ModelProvider | null>(null);
+  const [voiceprintEnrolled, setVoiceprintEnrolled] = useState(false);
 
   const version = Constants.expoConfig?.version || '2.0.0';
   const buildNumber = Constants.expoConfig?.ios?.buildNumber || '';
 
+  const loadVoiceprintStatus = React.useCallback(async () => {
+    try {
+      const res = await api.get<{ data: { enrolled: boolean } }>('voiceprint/status');
+      setVoiceprintEnrolled(res?.data?.enrolled ?? false);
+    } catch {}
+  }, []);
+
   React.useEffect(() => {
     loadKeys();
-  }, []);
+    loadVoiceprintStatus();
+  }, [loadVoiceprintStatus]);
 
   const loadKeys = async () => {
     const keys: Record<ModelProvider, string> = { openai: '', anthropic: '', google: '' };
@@ -272,6 +282,15 @@ export function SettingsScreen() {
               </Text>
             </View>
           )}
+        </View>
+
+        {/* Voice Identity */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Voice Identity</Text>
+          <VoiceEnrollment
+            enrolled={voiceprintEnrolled}
+            onEnrollmentChange={loadVoiceprintStatus}
+          />
         </View>
 
         {/* Account */}
