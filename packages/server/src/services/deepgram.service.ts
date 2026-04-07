@@ -67,21 +67,7 @@ export class DeepgramService {
     }
     const deepgram = createClient(apiKey);
 
-    // Deepgram Nova-3 supports specific locales but not all (e.g. en-SG returns 400).
-    // Supported English: en, en-US, en-GB, en-AU, en-IN, en-NZ.
-    // For unsupported locales, fall back to the base language code.
-    const SUPPORTED_LOCALES = new Set([
-      'en', 'en-US', 'en-GB', 'en-AU', 'en-IN', 'en-NZ',
-      'zh', 'zh-CN', 'zh-TW', 'ja', 'ko', 'hi',
-      'es', 'es-419', 'fr', 'fr-CA', 'de', 'it', 'pt', 'pt-BR',
-      'nl', 'pl', 'ru', 'sv', 'da', 'no', 'fi', 'tr', 'uk', 'id', 'ms', 'tl', 'vi', 'th',
-    ]);
-    let language = this.config.language || 'en';
-    if (!SUPPORTED_LOCALES.has(language)) {
-      const base = language.split('-')[0];
-      console.log(`[Deepgram] Unsupported locale "${language}", falling back to "${base}"`);
-      language = SUPPORTED_LOCALES.has(base) ? base : 'en';
-    }
+    const language = this.config.language || 'en';
 
     const dgOptions: Record<string, unknown> = {
       model: 'nova-3',
@@ -151,8 +137,19 @@ export class DeepgramService {
       // If the connection errors before Open, reject immediately
       this.connection.on(LiveTranscriptionEvents.Error, (err: any) => {
         clearTimeout(timeout);
+        // Try to extract the HTTP response body for 400/401 errors
+        const httpResponse = err?.response;
+        if (httpResponse && typeof httpResponse.on === 'function') {
+          let body = '';
+          httpResponse.on('data', (chunk: any) => { body += chunk; });
+          httpResponse.on('end', () => {
+            console.error(`[Deepgram] HTTP ${httpResponse.statusCode} response body:`, body);
+          });
+        }
         const errMsg = err?.message || err?.error || (typeof err === 'string' ? err : JSON.stringify(err));
         console.error(`[Deepgram] Connection error for session ${this.config.sessionId}:`, errMsg);
+        console.error(`[Deepgram] Full error object keys:`, Object.keys(err || {}));
+        console.error(`[Deepgram] Options sent:`, JSON.stringify(dgOptions));
         reject(new Error(`Deepgram error: ${errMsg}`));
       });
     });
