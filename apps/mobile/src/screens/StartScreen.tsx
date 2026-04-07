@@ -59,6 +59,7 @@ export function StartScreen() {
   const [gain, setGainState] = useState(getGain());
   const [showGain, setShowGain] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const debriefTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Keep refs so socket callbacks can read the latest values
   const isActiveRef = useRef(false);
@@ -152,7 +153,13 @@ export function StartScreen() {
           updated[existing] = data;
           return updated;
         }
-        return [...next, data];
+        const added = [...next, data];
+        // Cap at 200 segments to prevent unbounded memory growth in long sessions.
+        // Keep the most recent segments (user sees the latest transcript).
+        if (added.length > 200) {
+          return added.slice(-150);
+        }
+        return added;
       });
     });
 
@@ -165,7 +172,12 @@ export function StartScreen() {
     });
 
     sock.on('session:debrief', (data: { sessionId: string }) => {
-      // Session ended server-side, navigate to debrief
+      // Session ended server-side, navigate to debrief.
+      // Clear any pending debrief fallback timeout (set when user taps End Session).
+      if (debriefTimeoutRef.current) {
+        clearTimeout(debriefTimeoutRef.current);
+        debriefTimeoutRef.current = null;
+      }
       stopRecording().catch(() => {});
       if (timerRef.current) clearInterval(timerRef.current);
       setIsActive(false);
@@ -242,6 +254,7 @@ export function StartScreen() {
       cleanupSessionListeners();
       disconnectSocket();
       if (timerRef.current) clearInterval(timerRef.current);
+      if (debriefTimeoutRef.current) clearTimeout(debriefTimeoutRef.current);
     };
   }, [cleanupSessionListeners]);
 
@@ -271,8 +284,11 @@ export function StartScreen() {
 
               // Give the server up to 30s to send debrief.
               // If it doesn't arrive, clean up anyway.
-              const debriefTimeout = setTimeout(() => {
+              // The session:debrief listener in registerSessionListeners
+              // clears this timeout when debrief arrives.
+              debriefTimeoutRef.current = setTimeout(() => {
                 console.log('[session] Debrief timeout — cleaning up');
+                debriefTimeoutRef.current = null;
                 cleanupSessionListeners();
                 disconnectSocket();
                 setSessionId(null);
@@ -282,12 +298,6 @@ export function StartScreen() {
                 setElapsed(0);
                 refetchSessions();
               }, 30_000);
-
-              // If debrief arrives, the session:debrief listener already cleans up.
-              // We just need to clear our fallback timeout.
-              socket.once('session:debrief', () => {
-                clearTimeout(debriefTimeout);
-              });
             } else {
               // No socket — just clean up directly
               cleanupSessionListeners();
@@ -348,11 +358,17 @@ export function StartScreen() {
         registerSessionListeners(socket);
 
         // Start audio recording and stream raw PCM chunks to the server.
-        // Audio is sent as binary (Uint8Array) for 33% less bandwidth vs base64.
+        // Audio is sent as binary (ArrayBuffer) for 33% less bandwidth vs base64.
+        // IMPORTANT: We must slice the buffer to get an exact-size copy.
+        // Uint8Array.buffer can be larger than byteLength if the view is a subarray.
         await startRecording((pcmBytes: Uint8Array) => {
           const currentSocket = getSocket();
           if (currentSocket?.connected) {
-            currentSocket.emit('audio', pcmBytes.buffer);
+            const exactBuffer = pcmBytes.buffer.slice(
+              pcmBytes.byteOffset,
+              pcmBytes.byteOffset + pcmBytes.byteLength
+            );
+            currentSocket.emit('audio', exactBuffer);
           }
         });
       } catch (err: any) {

@@ -131,6 +131,13 @@ export function setupSocketHandlers(io: Server) {
       });
       if (!session) return;
 
+      // Guard: if a Deepgram connection already exists (e.g., rapid reconnect),
+      // clean it up before creating a new one to prevent orphaned connections.
+      if (deepgram) {
+        console.log(`[session] Cleaning up existing Deepgram connection before re-start for session ${sessionId}`);
+        await cleanupSession();
+      }
+
       // Store BYOK config if client provided it
       if (payload.byok?.apiKey) {
         byokConfig = {

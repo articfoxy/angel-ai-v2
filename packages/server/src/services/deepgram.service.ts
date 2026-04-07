@@ -169,13 +169,14 @@ export class DeepgramService {
       }
     });
 
-    this.connection.on(LiveTranscriptionEvents.Error, (err: any) => {
+    this.connection.on(LiveTranscriptionEvents.Error, async (err: any) => {
       console.error('Deepgram error:', err);
       if (this.config.onError) {
         this.config.onError(`Deepgram streaming error: ${err?.message || 'unknown'}`);
       }
-      // Close the broken connection to prevent hanging state
-      this.close();
+      // Close the broken connection to prevent hanging state.
+      // Await to ensure pending episode writes are flushed.
+      await this.close();
     });
   }
 
