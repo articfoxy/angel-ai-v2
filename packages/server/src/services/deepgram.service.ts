@@ -135,7 +135,9 @@ export class DeepgramService {
       // If the connection errors before Open, reject immediately
       this.connection.on(LiveTranscriptionEvents.Error, (err: any) => {
         clearTimeout(timeout);
-        reject(err);
+        const errMsg = err?.message || err?.error || (typeof err === 'string' ? err : JSON.stringify(err));
+        console.error(`[Deepgram] Connection error for session ${this.config.sessionId}:`, errMsg);
+        reject(new Error(`Deepgram error: ${errMsg}`));
       });
     });
 
