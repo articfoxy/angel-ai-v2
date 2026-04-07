@@ -109,10 +109,10 @@ export function setupSocketHandlers(io: Server) {
       }, WHISPER_INTERVAL_MS);
     }
 
-    function cleanupSession() {
+    async function cleanupSession() {
       clearAllTimers();
       if (deepgram) {
-        deepgram.close();
+        await deepgram.close();
         deepgram = null;
       }
       transcriptBuffer = [];
@@ -204,12 +204,23 @@ export function setupSocketHandlers(io: Server) {
     });
 
     socket.on('audio', (audioData: string | Buffer) => {
-      if (deepgram) {
-        // Mobile sends base64-encoded raw PCM; decode to Buffer for Deepgram
+      // Only accept audio during an active session with a live Deepgram connection
+      if (!currentSessionId || !deepgram) return;
+
+      try {
         const buffer = typeof audioData === 'string'
           ? Buffer.from(audioData, 'base64')
           : audioData;
+
+        // Validate buffer: reject empty, malformed, or oversized chunks
+        // Max ~256KB per chunk (16kHz * 16bit * 1ch * 8s ≈ 256KB)
+        if (!buffer || buffer.length === 0 || buffer.length > 262144) {
+          return;
+        }
+
         deepgram.sendAudio(buffer);
+      } catch (err) {
+        console.warn('[socket] Failed to process audio chunk:', err);
       }
     });
 
@@ -221,7 +232,8 @@ export function setupSocketHandlers(io: Server) {
       const speakers = deepgram ? deepgram.getSpeakers() : {};
 
       if (deepgram) {
-        deepgram.close();
+        // Await close to flush all pending episode writes before extraction
+        await deepgram.close();
         deepgram = null;
       }
 

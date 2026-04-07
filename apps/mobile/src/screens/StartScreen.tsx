@@ -254,23 +254,47 @@ export function StartScreen() {
           onPress: async () => {
             // Stop recording first so no more audio is sent
             await stopRecording();
-
-            // Stop session
-            const socket = getSocket();
-            if (socket && sessionId) {
-              socket.emit('session:stop', { sessionId });
-            }
-            cleanupSessionListeners();
-            disconnectSocket();
             if (timerRef.current) clearInterval(timerRef.current);
             setIsActive(false);
             setIsReconnecting(false);
-            setSessionId(null);
-            setSegments([]);
-            setWhisperCards([]);
-            setSpeakerNames({});
-            setElapsed(0);
-            refetchSessions();
+
+            // Tell the server to stop the session.
+            // DON'T disconnect yet — we need the socket alive so
+            // the server can send back session:debrief when extraction finishes.
+            const socket = getSocket();
+            if (socket && sessionId) {
+              socket.emit('session:stop', { sessionId });
+
+              // Give the server up to 30s to send debrief.
+              // If it doesn't arrive, clean up anyway.
+              const debriefTimeout = setTimeout(() => {
+                console.log('[session] Debrief timeout — cleaning up');
+                cleanupSessionListeners();
+                disconnectSocket();
+                setSessionId(null);
+                setSegments([]);
+                setWhisperCards([]);
+                setSpeakerNames({});
+                setElapsed(0);
+                refetchSessions();
+              }, 30_000);
+
+              // If debrief arrives, the session:debrief listener already cleans up.
+              // We just need to clear our fallback timeout.
+              socket.once('session:debrief', () => {
+                clearTimeout(debriefTimeout);
+              });
+            } else {
+              // No socket — just clean up directly
+              cleanupSessionListeners();
+              disconnectSocket();
+              setSessionId(null);
+              setSegments([]);
+              setWhisperCards([]);
+              setSpeakerNames({});
+              setElapsed(0);
+              refetchSessions();
+            }
           },
         },
       ]);

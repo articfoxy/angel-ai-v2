@@ -29,6 +29,7 @@ export class DeepgramService {
   private sessionStartTime: number = 0;
   private ready = false;
   private audioBuffer: Buffer[] = [];
+  private pendingWrites: Promise<any>[] = [];
 
   constructor(config: DeepgramConfig) {
     this.config = config;
@@ -62,6 +63,9 @@ export class DeepgramService {
     // Audio sent before Open fires is silently dropped by Deepgram.
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
+        // Close the dangling connection to prevent resource leak
+        try { this.connection.finish(); } catch {}
+        this.connection = null;
         reject(new Error(`Deepgram connection timed out after ${CONNECTION_TIMEOUT_MS}ms for session ${this.config.sessionId}`));
       }, CONNECTION_TIMEOUT_MS);
 
@@ -127,7 +131,7 @@ export class DeepgramService {
         const startTime = new Date(this.sessionStartTime + (data.start ?? 0) * 1000);
         const endTime = new Date(this.sessionStartTime + ((data.start ?? 0) + (data.duration ?? 0)) * 1000);
 
-        prisma.episode.create({
+        const writePromise = prisma.episode.create({
           data: {
             sessionId: this.config.sessionId,
             userId: this.config.userId,
@@ -137,6 +141,12 @@ export class DeepgramService {
             endTime,
           },
         }).catch((err: Error) => console.error('Episode save error:', err));
+
+        // Track pending writes so we can await them before closing
+        this.pendingWrites.push(writePromise);
+        writePromise.finally(() => {
+          this.pendingWrites = this.pendingWrites.filter((p) => p !== writePromise);
+        });
       }
     });
 
@@ -204,9 +214,24 @@ export class DeepgramService {
     // Chunks beyond the buffer limit are dropped to avoid unbounded memory growth
   }
 
-  close() {
+  /**
+   * Wait for all pending episode writes to complete.
+   * Call this before processing session data to ensure all episodes are saved.
+   */
+  async flush(): Promise<void> {
+    if (this.pendingWrites.length > 0) {
+      console.log(`[Deepgram] Flushing ${this.pendingWrites.length} pending episode writes...`);
+      await Promise.allSettled(this.pendingWrites);
+      this.pendingWrites = [];
+    }
+  }
+
+  async close(): Promise<void> {
+    // Flush pending writes before closing
+    await this.flush();
+
     if (this.connection) {
-      this.connection.finish();
+      try { this.connection.finish(); } catch {}
       this.connection = null;
     }
     this.ready = false;
