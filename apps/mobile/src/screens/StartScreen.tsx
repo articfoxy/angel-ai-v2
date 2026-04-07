@@ -343,11 +343,12 @@ export function StartScreen() {
         // Register all session-specific listeners (removes stale ones first)
         registerSessionListeners(socket);
 
-        // Start audio recording and stream chunks to the server
-        await startRecording((audioBase64: string) => {
+        // Start audio recording and stream raw PCM chunks to the server.
+        // Audio is sent as binary (Uint8Array) for 33% less bandwidth vs base64.
+        await startRecording((pcmBytes: Uint8Array) => {
           const currentSocket = getSocket();
           if (currentSocket?.connected) {
-            currentSocket.emit('audio', audioBase64);
+            currentSocket.emit('audio', pcmBytes.buffer);
           }
         });
       } catch (err: any) {

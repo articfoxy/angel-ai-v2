@@ -203,20 +203,27 @@ export function setupSocketHandlers(io: Server) {
       console.log(`Session started: ${sessionId}`);
     });
 
-    socket.on('audio', (audioData: string | Buffer) => {
+    socket.on('audio', (audioData: string | Buffer | ArrayBuffer) => {
       // Only accept audio during an active session with a live Deepgram connection
       if (!currentSessionId || !deepgram) return;
 
       try {
-        const buffer = typeof audioData === 'string'
-          ? Buffer.from(audioData, 'base64')
-          : audioData;
+        let buffer: Buffer;
 
-        // Validate buffer: reject empty, malformed, or oversized chunks
-        // Max ~256KB per chunk (16kHz * 16bit * 1ch * 8s ≈ 256KB)
-        if (!buffer || buffer.length === 0 || buffer.length > 262144) {
+        if (Buffer.isBuffer(audioData)) {
+          buffer = audioData;
+        } else if (audioData instanceof ArrayBuffer) {
+          // Binary transport from mobile (Uint8Array.buffer)
+          buffer = Buffer.from(audioData);
+        } else if (typeof audioData === 'string') {
+          // Legacy base64 transport (fallback)
+          buffer = Buffer.from(audioData, 'base64');
+        } else {
           return;
         }
+
+        // Reject empty or oversized chunks (max ~256KB ≈ 8s of audio)
+        if (buffer.length === 0 || buffer.length > 262144) return;
 
         deepgram.sendAudio(buffer);
       } catch (err) {

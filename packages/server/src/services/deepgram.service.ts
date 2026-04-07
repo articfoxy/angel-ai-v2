@@ -20,6 +20,9 @@ interface DeepgramConfig {
 const CONNECTION_TIMEOUT_MS = 5000;
 const MAX_BUFFERED_CHUNKS = 10;
 
+/** Deepgram closes idle connections after ~10s of silence. Send keepalive every 5s. */
+const KEEPALIVE_INTERVAL_MS = 5000;
+
 export class DeepgramService {
   private connection: any = null;
   private config: DeepgramConfig;
@@ -30,6 +33,8 @@ export class DeepgramService {
   private ready = false;
   private audioBuffer: Buffer[] = [];
   private pendingWrites: Promise<any>[] = [];
+  private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+  private lastAudioTime: number = 0;
 
   constructor(config: DeepgramConfig) {
     this.config = config;
@@ -81,6 +86,20 @@ export class DeepgramService {
         this.audioBuffer = [];
 
         console.log(`Deepgram connected for session ${this.config.sessionId}`);
+
+        // Start keepalive: send silent audio frames if no real audio arrives
+        // for a while. Deepgram drops idle connections after ~10s.
+        this.lastAudioTime = Date.now();
+        this.keepaliveTimer = setInterval(() => {
+          if (!this.connection || !this.ready) return;
+          const silenceMs = Date.now() - this.lastAudioTime;
+          if (silenceMs > KEEPALIVE_INTERVAL_MS) {
+            // Send 100ms of silence (16kHz * 2 bytes * 0.1s = 3200 bytes of zeros)
+            const silence = Buffer.alloc(3200);
+            try { this.connection.send(silence); } catch {}
+          }
+        }, KEEPALIVE_INTERVAL_MS);
+
         resolve();
       });
 
@@ -205,6 +224,8 @@ export class DeepgramService {
   sendAudio(data: Buffer) {
     if (!this.connection) return;
 
+    this.lastAudioTime = Date.now();
+
     if (this.ready) {
       this.connection.send(data);
     } else if (this.audioBuffer.length < MAX_BUFFERED_CHUNKS) {
@@ -227,6 +248,12 @@ export class DeepgramService {
   }
 
   async close(): Promise<void> {
+    // Stop keepalive first
+    if (this.keepaliveTimer) {
+      clearInterval(this.keepaliveTimer);
+      this.keepaliveTimer = null;
+    }
+
     // Flush pending writes before closing
     await this.flush();
 

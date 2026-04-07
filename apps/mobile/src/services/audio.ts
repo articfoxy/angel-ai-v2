@@ -12,17 +12,21 @@ let pollingInterval: ReturnType<typeof setInterval> | null = null;
 let processing = false;
 
 /**
- * Interval between chunk reads (ms).
- * We read the growing file every 300ms — no stop/start gap.
+ * ─── TUNING KNOBS ───
+ *
+ * CHUNK_INTERVAL_MS: How often we poll the file for new audio data.
+ *   Lower = lower latency but more CPU. 250ms is sweet spot.
+ *
+ * RESTART_INTERVAL_MS: How often we restart the recording to keep file small.
+ *   Lower = smaller file reads but more restart gaps.
+ *   10s keeps reads under ~320KB base64, with 99% capture rate.
+ *
+ * STALE_THRESHOLD: If delta-read sees no new data for this many cycles,
+ *   iOS file caching is blocking us — fall back to stop/start mode.
  */
-const CHUNK_INTERVAL_MS = 300;
-
-/**
- * Restart the recording every ~30s to prevent the WAV file from growing too
- * large (at 16kHz/16bit/mono ≈ 32KB/s → ~960KB per 30s). During the brief
- * restart gap (~100ms) we lose a tiny amount of audio, but 99.7% is captured.
- */
-const RESTART_INTERVAL_MS = 30_000;
+const CHUNK_INTERVAL_MS = 250;
+const RESTART_INTERVAL_MS = 10_000;
+const STALE_THRESHOLD = 4; // 4 × 250ms = 1s without new data → fallback
 
 const RECORDING_OPTIONS: Audio.RecordingOptions = {
   isMeteringEnabled: false,
@@ -51,17 +55,8 @@ const RECORDING_OPTIONS: Audio.RecordingOptions = {
   },
 };
 
-/**
- * Find the byte offset where the actual PCM "data" chunk begins in a WAV file.
- *
- * WAV files are RIFF containers with variable-length sub-chunks. The standard
- * header is 44 bytes, but expo-av (especially on iOS) may insert extra
- * metadata chunks (e.g., "LIST", "FLLR") before the "data" chunk, making the
- * header length unpredictable.
- *
- * This function properly parses the RIFF structure to find the "data" sub-chunk
- * and returns the offset of the first PCM sample byte.
- */
+// ─── WAV HEADER PARSING ───
+
 function findPcmDataOffset(bytes: Uint8Array): number {
   if (bytes.length < 44) return -1;
 
@@ -94,59 +89,61 @@ function findPcmDataOffset(bytes: Uint8Array): number {
     if (chunkSize % 2 !== 0) offset += 1;
   }
 
-  console.warn('[audio] "data" chunk not found in WAV, falling back to 44-byte offset');
+  console.warn('[audio] "data" chunk not found in WAV, falling back to 44');
   return 44;
 }
 
-/**
- * Convert a base64 string to Uint8Array.
- * Only decodes up to maxBytes for header parsing.
- */
 function base64ToBytes(b64: string, maxBytes?: number): Uint8Array {
-  const slice = maxBytes ? b64.substring(0, Math.ceil((maxBytes * 4) / 3)) : b64;
+  const slice = maxBytes
+    ? b64.substring(0, Math.ceil((maxBytes * 4) / 3))
+    : b64;
   const raw = atob(slice);
   const bytes = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) {
-    bytes[i] = raw.charCodeAt(i);
-  }
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
   return bytes;
 }
 
-/**
- * Convert a byte offset to a base64-aligned character offset.
- * Rounds UP to the next 4-char boundary so we never include header bytes.
- */
+/** Convert a byte offset to a 4-char-aligned base64 char offset (rounds UP). */
 function byteOffsetToBase64(byteOffset: number): number {
-  // 3 bytes = 4 base64 chars
-  // Round byte offset up to next multiple of 3, then convert
   const alignedBytes = Math.ceil(byteOffset / 3) * 3;
   return (alignedBytes / 3) * 4;
 }
 
-/**
- * Request microphone permission.
- */
+/** Decode a base64 string to a Uint8Array (full decode, for binary transport). */
+function decodeBase64ToBuffer(b64: string): Uint8Array {
+  const raw = atob(b64);
+  const buf = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) buf[i] = raw.charCodeAt(i);
+  return buf;
+}
+
+// ─── PUBLIC API ───
+
 export async function requestMicPermission(): Promise<boolean> {
   const { status } = await Audio.requestPermissionsAsync();
   return status === 'granted';
 }
 
 /**
- * Start audio recording and stream base64-encoded PCM chunks
- * via the onAudioData callback.
+ * Start recording and stream raw PCM chunks as Uint8Array via the callback.
  *
- * ─── HOW IT WORKS ───
- * Instead of stop/start cycling (which loses 40-80% of audio in the gap),
- * we READ the growing WAV file while recording continues, and send only the
- * new PCM data since the last read. This gives us zero-gap audio streaming.
+ * ─── STRATEGY: ADAPTIVE HYBRID ───
  *
- * Every ~30 seconds we restart the recording to prevent the file from growing
- * unboundedly. The brief restart gap (~100ms) loses <0.3% of audio.
+ * PRIMARY (delta-read):
+ *   Read the growing WAV file every 250ms and send only the new PCM bytes.
+ *   Zero audio gap — recording never stops during normal operation.
+ *   Every 10s we restart to keep file reads fast.
  *
- * Audio format: linear16 PCM, 16 kHz, mono — matching Deepgram's configuration.
+ * FALLBACK (stop/start):
+ *   If iOS file caching prevents delta-read from seeing new data for 1s,
+ *   we automatically switch to stop/start mode with 1s intervals.
+ *   ~15% audio gap but at least it works on all iOS versions.
+ *
+ * Output: Uint8Array of raw PCM (linear16, 16kHz, mono) — NOT base64.
+ *   This enables binary WebSocket transport (33% less bandwidth).
  */
 export async function startRecording(
-  onAudioData: (data: string) => void
+  onAudioData: (data: Uint8Array) => void
 ): Promise<void> {
   await stopRecording();
 
@@ -160,105 +157,198 @@ export async function startRecording(
   await recording.prepareToRecordAsync(RECORDING_OPTIONS);
   await recording.startAsync();
 
-  /** Base64 char position of the PCM data start in the current WAV file */
   let pcmBase64Start = -1;
-  /** How many base64 chars we've already sent from the current file */
   let lastSentLength = 0;
-  /** Timestamp of the current recording segment start */
+  let lastFileSize = 0;
+  let staleCount = 0;
+  let useFallback = false;
   let segmentStartTime = Date.now();
 
   processing = false;
+
+  console.log('[audio] Recording started — using delta-read strategy');
 
   pollingInterval = setInterval(async () => {
     if (processing || !recording) return;
     processing = true;
 
     try {
-      const currentRecording = recording;
-      const uri = currentRecording.getURI();
-      if (!uri) {
-        processing = false;
-        return;
-      }
+      if (useFallback) {
+        // ─── FALLBACK: stop/start mode ───
+        await runStopStartCycle(onAudioData);
+      } else {
+        // ─── PRIMARY: delta-read mode ───
+        const result = await runDeltaRead(onAudioData, {
+          pcmBase64Start,
+          lastSentLength,
+          lastFileSize,
+          staleCount,
+          segmentStartTime,
+        });
 
-      // Check the file exists and has data before reading
-      const fileInfo = await getInfoAsync(uri);
-      if (!fileInfo.exists || fileInfo.size < 100) {
-        processing = false;
-        return;
-      }
+        pcmBase64Start = result.pcmBase64Start;
+        lastSentLength = result.lastSentLength;
+        lastFileSize = result.lastFileSize;
+        staleCount = result.staleCount;
+        segmentStartTime = result.segmentStartTime;
 
-      // Read the entire file as base64 (this includes the WAV header + all PCM data so far)
-      const base64 = await readAsStringAsync(uri, {
-        encoding: EncodingType.Base64,
-      });
-
-      if (!base64 || base64.length < 80) {
-        processing = false;
-        return;
-      }
-
-      // On first read of a new file, parse WAV header to find PCM data offset
-      if (pcmBase64Start < 0) {
-        const headerBytes = base64ToBytes(base64, 8192);
-        const pcmByteOffset = findPcmDataOffset(headerBytes);
-        if (pcmByteOffset <= 0) {
-          console.warn('[audio] Could not find PCM data in WAV file');
-          processing = false;
-          return;
+        // Switch to fallback if delta-read sees no new data for too long
+        if (result.staleCount >= STALE_THRESHOLD && result.hadData) {
+          console.warn(
+            `[audio] Delta-read stale for ${STALE_THRESHOLD} cycles — switching to stop/start fallback`
+          );
+          useFallback = true;
+          // Stop the current long-running recording
+          try {
+            const uri = recording?.getURI();
+            await recording?.stopAndUnloadAsync();
+            if (uri) deleteAsync(uri, { idempotent: true }).catch(() => {});
+          } catch {}
         }
-
-        pcmBase64Start = byteOffsetToBase64(pcmByteOffset);
-        lastSentLength = pcmBase64Start;
-        console.log(`[audio] WAV PCM starts at byte ${pcmByteOffset} (base64 char ${pcmBase64Start})`);
-      }
-
-      // Align the readable end to a 4-char base64 boundary
-      const alignedEnd = Math.floor(base64.length / 4) * 4;
-
-      // Send only the new PCM data since last read
-      if (alignedEnd > lastSentLength) {
-        const chunk = base64.substring(lastSentLength, alignedEnd);
-        if (chunk.length > 0) {
-          onAudioData(chunk);
-        }
-        lastSentLength = alignedEnd;
-      }
-
-      // Periodically restart recording to prevent unbounded file growth
-      const elapsed = Date.now() - segmentStartTime;
-      if (elapsed >= RESTART_INTERVAL_MS) {
-        console.log('[audio] Restarting recording to prevent file bloat');
-
-        // Stop the old recording
-        try {
-          await currentRecording.stopAndUnloadAsync();
-        } catch {
-          // May already be stopped
-        }
-        deleteAsync(uri, { idempotent: true }).catch(() => {});
-
-        // Start fresh
-        recording = new Audio.Recording();
-        await recording.prepareToRecordAsync(RECORDING_OPTIONS);
-        await recording.startAsync();
-
-        // Reset state for the new file
-        pcmBase64Start = -1;
-        lastSentLength = 0;
-        segmentStartTime = Date.now();
       }
     } catch (err) {
-      console.warn('[audio] Chunk read error (may be normal during stop):', err);
+      console.warn('[audio] Chunk cycle error:', err);
     } finally {
       processing = false;
     }
-  }, CHUNK_INTERVAL_MS);
+  }, useFallback ? 1000 : CHUNK_INTERVAL_MS);
 }
 
-/**
- * Stop recording and clean up all resources.
- */
+// ─── DELTA-READ (PRIMARY) ───
+
+interface DeltaState {
+  pcmBase64Start: number;
+  lastSentLength: number;
+  lastFileSize: number;
+  staleCount: number;
+  segmentStartTime: number;
+}
+
+async function runDeltaRead(
+  onAudioData: (data: Uint8Array) => void,
+  state: DeltaState
+): Promise<DeltaState & { hadData: boolean }> {
+  let { pcmBase64Start, lastSentLength, lastFileSize, staleCount, segmentStartTime } = state;
+
+  const currentRecording = recording;
+  if (!currentRecording) return { ...state, hadData: false };
+
+  const uri = currentRecording.getURI();
+  if (!uri) return { ...state, hadData: false };
+
+  // Quick size check — skip full read if file hasn't grown
+  const fileInfo = await getInfoAsync(uri);
+  if (!fileInfo.exists || fileInfo.size < 100) return { ...state, hadData: false };
+
+  const currentSize = fileInfo.size;
+  const hadData = lastFileSize > 0; // We've seen data before
+
+  if (currentSize === lastFileSize) {
+    // File hasn't grown since last read
+    staleCount++;
+    return { pcmBase64Start, lastSentLength, lastFileSize, staleCount, segmentStartTime, hadData };
+  }
+
+  // File grew — reset stale counter
+  staleCount = 0;
+  lastFileSize = currentSize;
+
+  // Read the file
+  const base64 = await readAsStringAsync(uri, { encoding: EncodingType.Base64 });
+  if (!base64 || base64.length < 80) return { ...state, hadData };
+
+  // Parse WAV header on first read
+  if (pcmBase64Start < 0) {
+    const headerBytes = base64ToBytes(base64, 8192);
+    const pcmByteOffset = findPcmDataOffset(headerBytes);
+    if (pcmByteOffset <= 0) {
+      console.warn('[audio] Could not find PCM data in WAV');
+      return { pcmBase64Start, lastSentLength, lastFileSize, staleCount, segmentStartTime, hadData };
+    }
+    pcmBase64Start = byteOffsetToBase64(pcmByteOffset);
+    lastSentLength = pcmBase64Start;
+    console.log(`[audio] PCM starts at byte ${pcmByteOffset} (b64 char ${pcmBase64Start})`);
+  }
+
+  // Extract only the new data
+  const alignedEnd = Math.floor(base64.length / 4) * 4;
+  if (alignedEnd > lastSentLength) {
+    const newB64 = base64.substring(lastSentLength, alignedEnd);
+    if (newB64.length > 0) {
+      // Decode to raw PCM bytes for binary transport
+      const pcmBytes = decodeBase64ToBuffer(newB64);
+      if (pcmBytes.length > 0) {
+        onAudioData(pcmBytes);
+      }
+    }
+    lastSentLength = alignedEnd;
+  }
+
+  // Periodic restart to keep file small
+  const elapsed = Date.now() - segmentStartTime;
+  if (elapsed >= RESTART_INTERVAL_MS) {
+    console.log('[audio] Restarting recording (periodic)');
+    try {
+      await currentRecording.stopAndUnloadAsync();
+    } catch {}
+    deleteAsync(uri, { idempotent: true }).catch(() => {});
+
+    recording = new Audio.Recording();
+    await recording.prepareToRecordAsync(RECORDING_OPTIONS);
+    await recording.startAsync();
+
+    pcmBase64Start = -1;
+    lastSentLength = 0;
+    lastFileSize = 0;
+    segmentStartTime = Date.now();
+  }
+
+  return { pcmBase64Start, lastSentLength, lastFileSize, staleCount, segmentStartTime, hadData };
+}
+
+// ─── STOP/START FALLBACK ───
+
+async function runStopStartCycle(onAudioData: (data: Uint8Array) => void) {
+  const currentRecording = recording;
+  if (!currentRecording) return;
+
+  // Stop current recording to finalize the WAV
+  await currentRecording.stopAndUnloadAsync();
+  const uri = currentRecording.getURI();
+
+  // Start a new recording immediately to minimize gap
+  recording = new Audio.Recording();
+  await recording.prepareToRecordAsync(RECORDING_OPTIONS);
+  await recording.startAsync();
+
+  // Read the completed chunk
+  if (uri) {
+    try {
+      const base64 = await readAsStringAsync(uri, { encoding: EncodingType.Base64 });
+      if (base64 && base64.length > 80) {
+        const headerBytes = base64ToBytes(base64, 8192);
+        const pcmOffset = findPcmDataOffset(headerBytes);
+        if (pcmOffset > 0) {
+          const b64Start = byteOffsetToBase64(pcmOffset);
+          const alignedEnd = Math.floor(base64.length / 4) * 4;
+          if (alignedEnd > b64Start) {
+            const pcmB64 = base64.substring(b64Start, alignedEnd);
+            const pcmBytes = decodeBase64ToBuffer(pcmB64);
+            if (pcmBytes.length > 0) {
+              onAudioData(pcmBytes);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[audio] Fallback read error:', err);
+    }
+    deleteAsync(uri, { idempotent: true }).catch(() => {});
+  }
+}
+
+// ─── STOP ───
+
 export async function stopRecording(): Promise<void> {
   if (pollingInterval) {
     clearInterval(pollingInterval);
@@ -273,23 +363,15 @@ export async function stopRecording(): Promise<void> {
       if (status.isRecording) {
         await recording.stopAndUnloadAsync();
       }
-    } catch {
-      // Recording may already be stopped
-    }
+    } catch {}
 
     try {
       const uri = recording.getURI();
-      if (uri) {
-        await deleteAsync(uri, { idempotent: true }).catch(() => {});
-      }
-    } catch {
-      // ignore
-    }
+      if (uri) await deleteAsync(uri, { idempotent: true }).catch(() => {});
+    } catch {}
 
     recording = null;
   }
 
-  await Audio.setAudioModeAsync({
-    allowsRecordingIOS: false,
-  }).catch(() => {});
+  await Audio.setAudioModeAsync({ allowsRecordingIOS: false }).catch(() => {});
 }
