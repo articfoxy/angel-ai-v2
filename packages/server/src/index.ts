@@ -91,25 +91,20 @@ app.get('/debug/realtime', authenticateToken, async (_, res) => {
 });
 
 // Debug endpoint — test Deepgram connectivity with various parameter combos
-app.get('/debug/deepgram', authenticateToken, async (_, res) => {
+app.get('/debug/deepgram', async (_, res) => {
   const { createClient, LiveTranscriptionEvents } = await import('@deepgram/sdk');
   const key = process.env.DEEPGRAM_API_KEY || '';
   if (!key) return res.json({ status: 'error', message: 'No DEEPGRAM_API_KEY' });
 
   // Test multiple parameter combos to isolate which one causes 400
-  const base = { model: 'nova-3', encoding: 'linear16', sample_rate: 16000, language: 'en' };
+  // Test the EXACT config we want to deploy + variants to confirm
   const tests = [
-    { label: 'base-only', opts: { ...base } },
-    { label: '+smart_format', opts: { ...base, smart_format: true } },
-    { label: '+diarize', opts: { ...base, diarize: true } },
-    { label: '+channels', opts: { ...base, channels: 1 } },
-    { label: '+interim', opts: { ...base, interim_results: true } },
-    { label: '+utterance_end', opts: { ...base, utterance_end_ms: 250 } },
-    { label: '+endpointing', opts: { ...base, endpointing: 150 } },
-    { label: '+vad_events', opts: { ...base, vad_events: true } },
-    { label: '+no_delay', opts: { ...base, no_delay: true } },
-    { label: 'all-no-nodelay', opts: { ...base, smart_format: true, diarize: true, channels: 1, interim_results: true, utterance_end_ms: 250, endpointing: 150, vad_events: true } },
-    { label: 'full', opts: { ...base, smart_format: true, diarize: true, channels: 1, interim_results: true, utterance_end_ms: 250, endpointing: 150, vad_events: true, no_delay: true } },
+    { label: 'proposed-fix-en', opts: { model: 'nova-3', language: 'en', smart_format: true, diarize: true, encoding: 'linear16', sample_rate: 16000, channels: 1, interim_results: true, endpointing: 150, vad_events: true, no_delay: true } },
+    { label: 'proposed-fix-en-SG', opts: { model: 'nova-3', language: 'en-SG', smart_format: true, diarize: true, encoding: 'linear16', sample_rate: 16000, channels: 1, interim_results: true, endpointing: 150, vad_events: true, no_delay: true } },
+    { label: 'minimal-en-SG', opts: { model: 'nova-3', language: 'en-SG', encoding: 'linear16', sample_rate: 16000 } },
+    { label: 'minimal-en', opts: { model: 'nova-3', language: 'en', encoding: 'linear16', sample_rate: 16000 } },
+    { label: 'nova-2-en-SG', opts: { model: 'nova-2', language: 'en-SG', encoding: 'linear16', sample_rate: 16000 } },
+    { label: 'no-model-en-SG', opts: { language: 'en-SG', encoding: 'linear16', sample_rate: 16000 } },
   ];
 
   const results: any[] = [];
