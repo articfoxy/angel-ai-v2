@@ -12,7 +12,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.angelai.app",
-      "buildNumber": "29",
+      "buildNumber": "30",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Angel AI needs microphone access to provide real-time conversation intelligence.",
         "UIBackgroundModes": [
@@ -28,6 +28,9 @@
       "resizeMode": "contain",
       "backgroundColor": "#050507"
     },
+    "updates": {
+      "url": "https://u.expo.dev/e09202a5-3fdc-4ee6-a646-485b4e99e1c5"
+    },
     "plugins": [
       "expo-secure-store",
       [
@@ -37,6 +40,7 @@
         }
       ],
       "expo-apple-authentication",
+      "expo-updates",
       [
         "@siteed/audio-studio",
         {

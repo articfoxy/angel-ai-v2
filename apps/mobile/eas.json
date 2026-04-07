@@ -6,6 +6,7 @@
   "build": {
     "production": {
       "distribution": "store",
+      "channel": "production",
       "ios": {
         "credentialsSource": "remote"
       }
