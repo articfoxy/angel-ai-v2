@@ -502,10 +502,14 @@ export function StartScreen() {
 
         // If test mode — trigger test script and SKIP recording so TTS audio
         // can play without the recording session claiming the audio hardware.
+        // Delay 3s so server has time to fully initialize Realtime AI + TTS.
         const isTestMode = testModeRef.current;
         if (isTestMode) {
           testModeRef.current = false;
-          socket.emit('session:test');
+          setTimeout(() => {
+            const s = getSocket();
+            if (s?.connected) s.emit('session:test');
+          }, 3000);
         } else {
           // Start audio recording and stream raw PCM chunks to the server.
           // Audio is sent as binary (ArrayBuffer) for 33% less bandwidth vs base64.

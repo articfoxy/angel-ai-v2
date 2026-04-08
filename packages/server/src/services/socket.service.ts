@@ -149,6 +149,7 @@ export function setupSocketHandlers(io: Server) {
       angelProcessing = false;
       if (angelThinkingTimer) { clearTimeout(angelThinkingTimer); angelThinkingTimer = null; }
       if (testTimer) { clearTimeout(testTimer); testTimer = null; }
+      isTestMode = false;
 
       // Close services in parallel for faster cleanup
       const closePromises: Promise<void>[] = [];
@@ -278,7 +279,10 @@ export function setupSocketHandlers(io: Server) {
           },
           onDone: (data) => {
             socket.emit('tts:done', data);
-            // ttsPlaying stays true until client confirms playback end via tts:finished
+            // Release echo gate when Cartesia finishes streaming — don't wait for
+            // client tts:finished which may never arrive if playback fails.
+            ttsPlaying = false;
+            if (ttsEchoTimer) { clearTimeout(ttsEchoTimer); ttsEchoTimer = null; }
           },
           onError: (error) => {
             console.error('[TTS] Error:', error);
@@ -508,8 +512,13 @@ export function setupSocketHandlers(io: Server) {
 
     // ── Test conversation mode ──
     let testTimer: ReturnType<typeof setTimeout> | null = null;
+    let isTestMode = false;
     socket.on('session:test', () => {
-      if (!currentSessionId || !realtime) return;
+      if (!currentSessionId || !realtime) {
+        console.warn('[test] session:test received but session not ready (sessionId:', currentSessionId, 'realtime:', !!realtime, ')');
+        return;
+      }
+      isTestMode = true;
       console.log('[test] Starting test conversation');
 
       const SPEAKERS = [
@@ -579,8 +588,8 @@ export function setupSocketHandlers(io: Server) {
           transcriptBuffer = transcriptBuffer.slice(-40);
         }
 
-        // Feed to Realtime AI (respects echo gate)
-        if (realtime && !ttsPlaying) {
+        // Feed to Realtime AI — no echo gate for test mode (no mic = no echo)
+        if (realtime) {
           realtime.feedTranscript(`[${sp.label}]: ${seg.text}`);
         }
 
