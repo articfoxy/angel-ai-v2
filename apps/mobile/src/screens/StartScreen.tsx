@@ -66,7 +66,6 @@ export function StartScreen() {
   const [showGain, setShowGain] = useState(false);
   const [angelThinking, setAngelThinking] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const debriefTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isStartingRef = useRef(false); // Double-tap guard for session creation
 
   // Keep refs so socket callbacks can read the latest values
@@ -181,28 +180,9 @@ export function StartScreen() {
       setSpeakerNames((prev) => ({ ...prev, [data.speakerId]: data.label }));
     });
 
-    sock.on('session:debrief', (data: { sessionId: string }) => {
-      // Session ended server-side, navigate to debrief.
-      // Clear any pending debrief fallback timeout (set when user taps End Session).
-      if (debriefTimeoutRef.current) {
-        clearTimeout(debriefTimeoutRef.current);
-        debriefTimeoutRef.current = null;
-      }
-      stopRecording().catch(() => {});
-      if (timerRef.current) clearInterval(timerRef.current);
-      setIsActive(false);
-      setAngelThinking(false);
-      setSessionId(null);
-      setSegments([]);
-      setWhisperCards([]);
-      setSpeakerNames({});
-      setElapsed(0);
-      startPayloadRef.current = null;
-      disposeTTSPlayer();
-      cleanupSessionListeners();
-      disconnectSocket();
+    sock.on('session:debrief', () => {
+      // Server finished processing — just refresh history list (no popup)
       refetchSessions();
-      navigation.navigate('Debrief', { sessionId: data.sessionId });
     });
 
     sock.on('session:timeout', (data: { reason: string; message: string }) => {
@@ -310,7 +290,6 @@ export function StartScreen() {
       cleanupSessionListeners();
       disconnectSocket();
       if (timerRef.current) clearInterval(timerRef.current);
-      if (debriefTimeoutRef.current) clearTimeout(debriefTimeoutRef.current);
     };
   }, [cleanupSessionListeners]);
 
@@ -332,48 +311,28 @@ export function StartScreen() {
           text: 'End Session',
           style: 'destructive',
           onPress: async () => {
-            // Stop recording first so no more audio is sent
             await stopRecording();
             if (timerRef.current) clearInterval(timerRef.current);
-            setIsActive(false);
-            setIsReconnecting(false);
 
-            // Tell the server to stop the session.
-            // DON'T disconnect yet — we need the socket alive so
-            // the server can send back session:debrief when extraction finishes.
+            // Tell server to stop, then clean up immediately (no debrief wait)
             const socket = getSocket();
             if (socket && sessionId) {
               socket.emit('session:stop', { sessionId });
-
-              // Give the server up to 30s to send debrief.
-              // If it doesn't arrive, clean up anyway.
-              // The session:debrief listener in registerSessionListeners
-              // clears this timeout when debrief arrives.
-              debriefTimeoutRef.current = setTimeout(() => {
-                console.log('[session] Debrief timeout — cleaning up');
-                debriefTimeoutRef.current = null;
-                disposeTTSPlayer();
-                cleanupSessionListeners();
-                disconnectSocket();
-                setSessionId(null);
-                setSegments([]);
-                setWhisperCards([]);
-                setSpeakerNames({});
-                setElapsed(0);
-                refetchSessions();
-              }, 30_000);
-            } else {
-              // No socket — just clean up directly
-              disposeTTSPlayer();
-              cleanupSessionListeners();
-              disconnectSocket();
-              setSessionId(null);
-              setSegments([]);
-              setWhisperCards([]);
-              setSpeakerNames({});
-              setElapsed(0);
-              refetchSessions();
             }
+
+            setIsActive(false);
+            setIsReconnecting(false);
+            setAngelThinking(false);
+            setSessionId(null);
+            setSegments([]);
+            setWhisperCards([]);
+            setSpeakerNames({});
+            setElapsed(0);
+            startPayloadRef.current = null;
+            disposeTTSPlayer();
+            cleanupSessionListeners();
+            disconnectSocket();
+            refetchSessions();
           },
         },
       ]);

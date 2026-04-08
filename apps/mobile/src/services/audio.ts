@@ -122,7 +122,7 @@ export async function startRecording(
     sampleRate: 16000,
     channels: 1,
     encoding: 'pcm_16bit' as const,
-    interval: 100, // Emit accumulated PCM every 100ms
+    interval: 50, // Emit accumulated PCM every 50ms for lower latency
     keepAwake: true,
     // Don't write to file — streaming only
     output: {
@@ -136,12 +136,12 @@ export async function startRecording(
           'AllowBluetooth',
           'AllowBluetoothA2DP',
         ],
-        mode: 'Default',
+        mode: 'VoiceChat', // Low-latency audio + hardware AEC for TTS
       },
     },
   };
 
-  console.log('[audio] Starting true streaming (100ms native emission interval)');
+  console.log('[audio] Starting true streaming (50ms native emission interval)');
   await ExpoAudioStreamModule.startRecording(nativeConfig);
   isCurrentlyRecording = true;
 }

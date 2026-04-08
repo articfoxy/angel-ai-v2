@@ -376,11 +376,18 @@ export class DeepgramService {
   sendAudio(data: Buffer) {
     if (!this.connection) return;
 
-    this.lastAudioTime = Date.now();
+    const now = Date.now();
+    this.lastAudioTime = now;
 
-    this.audioTimestamps.push({ buffer: data, timestamp: Date.now() });
-    const cutoff = Date.now() - 60_000;
-    this.audioTimestamps = this.audioTimestamps.filter(a => a.timestamp > cutoff);
+    // Only buffer timestamps while owner identification is pending (voiceprint matching)
+    if (!this.ownerIdentified && this.config.voiceprint) {
+      this.audioTimestamps.push({ buffer: data, timestamp: now });
+      // Prune old entries every 100 chunks (~5s at 50ms interval) instead of every call
+      if (this.audioTimestamps.length % 100 === 0) {
+        const cutoff = now - 60_000;
+        this.audioTimestamps = this.audioTimestamps.filter(a => a.timestamp > cutoff);
+      }
+    }
 
     if (this.ready) {
       this.connection.send(data);
