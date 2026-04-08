@@ -13,8 +13,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { Audio } from 'expo-av';
-import { cacheDirectory, downloadAsync } from 'expo-file-system/src/legacy/FileSystem';
+import { AudioContext, AudioBufferQueueSourceNode } from 'react-native-audio-api';
 import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import { useAuth } from '../hooks/useAuth';
@@ -78,7 +77,8 @@ export function SettingsScreen() {
   const [selectedVoice, setSelectedVoice] = useState<string>('');
   const [voicesLoading, setVoicesLoading] = useState(false);
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
-  const soundRef = useRef<Audio.Sound | null>(null);
+  const previewCtxRef = useRef<AudioContext | null>(null);
+  const previewSourceRef = useRef<AudioBufferQueueSourceNode | null>(null);
   const [micSource, setMicSource] = useState<MicSource>('auto');
   const [outputDevice, setOutputDevice] = useState<OutputDevice>('auto');
 
@@ -124,7 +124,14 @@ export function SettingsScreen() {
 
   React.useEffect(() => {
     return () => {
-      if (soundRef.current) soundRef.current.unloadAsync();
+      if (previewSourceRef.current) {
+        try { previewSourceRef.current.stop(); } catch {}
+        previewSourceRef.current = null;
+      }
+      if (previewCtxRef.current) {
+        previewCtxRef.current.close();
+        previewCtxRef.current = null;
+      }
     };
   }, []);
 
@@ -160,51 +167,83 @@ export function SettingsScreen() {
   };
 
   const previewVoice = async (voiceId: string) => {
+    // Toggle off if already playing this voice
     if (playingVoiceId === voiceId) {
-      if (soundRef.current) {
-        await soundRef.current.unloadAsync();
-        soundRef.current = null;
+      if (previewSourceRef.current) {
+        try { previewSourceRef.current.stop(); } catch {}
+        previewSourceRef.current = null;
+      }
+      if (previewCtxRef.current) {
+        previewCtxRef.current.close();
+        previewCtxRef.current = null;
       }
       setPlayingVoiceId(null);
       return;
     }
-    if (soundRef.current) {
-      await soundRef.current.unloadAsync();
-      soundRef.current = null;
+    // Stop any existing preview
+    if (previewSourceRef.current) {
+      try { previewSourceRef.current.stop(); } catch {}
+      previewSourceRef.current = null;
     }
+    if (previewCtxRef.current) {
+      previewCtxRef.current.close();
+      previewCtxRef.current = null;
+    }
+
     setPlayingVoiceId(voiceId);
     try {
-      // Download WAV to local cache first — remote URL streaming is unreliable on iOS
-      const localUri = `${cacheDirectory}voice-preview-${voiceId}.wav`;
-      const { status } = await downloadAsync(
-        `${API_URL}/api/voices/preview/${voiceId}`,
-        localUri,
-      );
-      if (status !== 200) {
-        Alert.alert('Preview Failed', `Server returned ${status}`);
+      // Fetch WAV from server
+      const response = await fetch(`${API_URL}/api/voices/preview/${voiceId}`);
+      if (!response.ok) {
+        Alert.alert('Preview Failed', `Server returned ${response.status}`);
         setPlayingVoiceId(null);
         return;
       }
+      const arrayBuffer = await response.arrayBuffer();
 
-      // Set audio mode for speaker playback
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: false,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
-      });
-
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: localUri },
-        { shouldPlay: true, volume: 1.0 },
-      );
-      soundRef.current = sound;
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded && status.didJustFinish) {
-          setPlayingVoiceId(null);
-          sound.unloadAsync();
-          soundRef.current = null;
+      // Parse WAV header to find PCM data chunk
+      const view = new DataView(arrayBuffer);
+      let dataOffset = 44;
+      let dataSize = arrayBuffer.byteLength - 44;
+      for (let i = 12; i < Math.min(arrayBuffer.byteLength - 8, 200); i++) {
+        if (
+          view.getUint8(i) === 0x64 &&     // 'd'
+          view.getUint8(i + 1) === 0x61 &&  // 'a'
+          view.getUint8(i + 2) === 0x74 &&  // 't'
+          view.getUint8(i + 3) === 0x61     // 'a'
+        ) {
+          dataSize = view.getUint32(i + 4, true);
+          dataOffset = i + 8;
+          break;
         }
-      });
+      }
+
+      // Convert 16-bit signed LE PCM → Float32 [-1, 1]
+      const pcmBytes = new Uint8Array(arrayBuffer, dataOffset, dataSize);
+      const int16 = new Int16Array(pcmBytes.buffer, pcmBytes.byteOffset, Math.floor(pcmBytes.byteLength / 2));
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) {
+        float32[i] = int16[i] / 32768;
+      }
+
+      // Play via react-native-audio-api (same engine as TTS — proven to work)
+      const ctx = new AudioContext({ sampleRate: 24000 });
+      previewCtxRef.current = ctx;
+
+      const buffer = ctx.createBuffer(1, float32.length, 24000);
+      buffer.copyToChannel(float32, 0, 0);
+
+      const source = ctx.createBufferQueueSource();
+      source.connect(ctx.destination);
+      source.onEnded = () => {
+        setPlayingVoiceId(null);
+        ctx.close();
+        if (previewCtxRef.current === ctx) previewCtxRef.current = null;
+        if (previewSourceRef.current === source) previewSourceRef.current = null;
+      };
+      source.enqueueBuffer(buffer);
+      source.start();
+      previewSourceRef.current = source;
     } catch (err: any) {
       console.warn('[settings] Voice preview failed:', err);
       Alert.alert('Preview Error', err?.message || 'Could not play voice preview');
