@@ -79,6 +79,7 @@ export function StartScreen() {
   const [angelThinking, setAngelThinking] = useState(false);
   const [activePresets, setActivePresets] = useState<string[]>([]);
   const [customInstructions, setCustomInstructions] = useState('');
+  const [liveDirective, setLiveDirective] = useState('');
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isStartingRef = useRef(false); // Double-tap guard for session creation
   const testModeRef = useRef(false);
@@ -338,6 +339,17 @@ export function StartScreen() {
     await SecureStore.setItemAsync('angel_v2_custom_instructions', text);
   }, []);
 
+  const sendLiveDirective = useCallback(() => {
+    const text = liveDirective.trim();
+    if (!text) return;
+    const sock = getSocket();
+    if (sock?.connected) {
+      sock.emit('session:instruct', { text });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setLiveDirective('');
+    }
+  }, [liveDirective]);
+
   const handleTest = useCallback(() => {
     testModeRef.current = true;
     handleToggle();
@@ -582,6 +594,25 @@ export function StartScreen() {
             whisperCards={whisperCards}
           />
 
+          {/* Live directive input */}
+          <View style={styles.directiveRow}>
+            <TextInput
+              style={styles.directiveInput}
+              value={liveDirective}
+              onChangeText={setLiveDirective}
+              placeholder="Instruct Angel live..."
+              placeholderTextColor={colors.textTertiary}
+              returnKeyType="send"
+              onSubmitEditing={sendLiveDirective}
+              blurOnSubmit={false}
+            />
+            {liveDirective.trim().length > 0 && (
+              <TouchableOpacity onPress={sendLiveDirective} style={styles.directiveSend}>
+                <Ionicons name="arrow-up-circle" size={28} color={colors.primary} />
+              </TouchableOpacity>
+            )}
+          </View>
+
           {/* Bottom control bar */}
           <View style={styles.activeButtonRow}>
             {/* Gain slider toggle */}
@@ -792,6 +823,29 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   activeContainer: { flex: 1 },
+  directiveRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    gap: spacing.xs,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  directiveInput: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    borderRadius: 20,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    color: colors.text,
+    fontSize: fontSize.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  directiveSend: {
+    padding: 2,
+  },
   askAngelBtn: {
     flexDirection: 'row',
     alignItems: 'center',

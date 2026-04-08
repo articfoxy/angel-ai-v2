@@ -250,6 +250,11 @@ export class RealtimeService {
     });
   }
 
+  /** Get the current system instructions. */
+  get instructions(): string {
+    return this.config.instructions;
+  }
+
   /**
    * Update the session instructions (e.g., user changed their Angel Instructions).
    */

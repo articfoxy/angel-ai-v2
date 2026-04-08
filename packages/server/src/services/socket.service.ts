@@ -497,6 +497,21 @@ export function setupSocketHandlers(io: Server) {
       }
     });
 
+    // Live instruction update — modifies the Realtime AI system prompt mid-session
+    let liveDirectives: string[] = [];
+    socket.on('session:instruct', (data: { text: string }) => {
+      if (!realtime || !data?.text?.trim()) return;
+      const directive = data.text.trim();
+      liveDirectives.push(directive);
+      console.log(`[session] Live directive: "${directive}"`);
+
+      // Rebuild full instructions with the live directives appended
+      const baseInstructions = realtime.instructions;
+      const liveSection = '\n\n## LIVE DIRECTIVES (from the user during this session)\n' +
+        liveDirectives.map((d, i) => `${i + 1}. ${d}`).join('\n');
+      realtime.updateInstructions(baseInstructions.split('\n\n## LIVE DIRECTIVES')[0] + liveSection);
+    });
+
     // TTS client control events
     socket.on('tts:skip', () => {
       if (tts) tts.cancel();
