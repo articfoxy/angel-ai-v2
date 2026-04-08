@@ -443,14 +443,16 @@ export function StartScreen() {
           startPayload.byok = { provider: byokProvider, apiKey: byokKey };
         }
 
-        // Load speech recognition settings (keywords for boosting)
+        // Load speech recognition settings (keywords + locale)
         const keywordsRaw = await SecureStore.getItemAsync('angel_v2_speech_keywords');
         const keywords = keywordsRaw
           ? keywordsRaw.split('\n').map(k => k.trim()).filter(Boolean)
           : undefined;
-        if (keywords && keywords.length > 0) {
-          startPayload.speech = { keywords };
-        }
+        const speechLocale = await SecureStore.getItemAsync('angel_v2_speech_locale');
+        const speech: Record<string, unknown> = {};
+        if (keywords && keywords.length > 0) speech.keywords = keywords;
+        if (speechLocale && speechLocale !== 'en') speech.speechLocale = speechLocale;
+        if (Object.keys(speech).length > 0) startPayload.speech = speech;
 
         // Load Angel Instructions (presets + custom) — wrapped in try/catch
         // so corrupted data can't prevent session start

@@ -177,7 +177,7 @@ export function setupSocketHandlers(io: Server) {
     socket.on('session:start', async (payload: {
       sessionId: string;
       byok?: { provider: string; apiKey: string; model?: string };
-      speech?: { keywords?: string[] };
+      speech?: { keywords?: string[]; speechLocale?: string };
       instructions?: string;
       ownerLanguage?: string;
       voiceId?: string;
@@ -379,6 +379,7 @@ export function setupSocketHandlers(io: Server) {
         sessionId,
         userId,
         keywords: payload.speech?.keywords,
+        speechLocale: payload.speech?.speechLocale,
       });
 
       try {

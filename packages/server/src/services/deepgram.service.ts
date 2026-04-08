@@ -20,6 +20,8 @@ interface DeepgramConfig {
   userId: string;
   /** Keywords to boost recognition for, e.g. ["kubernetes:2", "LTV:CAC:1.5"] */
   keywords?: string[];
+  /** Speech locale hint, e.g. "en-US", "en-GB". Falls back to "multi" if not set. */
+  speechLocale?: string;
 }
 
 const CONNECTION_TIMEOUT_MS = 5000;
@@ -68,9 +70,9 @@ export class DeepgramService {
     }
     const deepgram = createClient(apiKey);
 
-    // Use multilingual mode so Deepgram transcribes all languages (English, Chinese, etc.)
-    // The user's locale preference is ignored — 'multi' handles everything.
-    const language = 'multi';
+    // Use the user's speech locale if set (e.g. "en-US" for better accent accuracy),
+    // otherwise fall back to multilingual mode for mixed-language conversations.
+    const language = this.config.speechLocale || 'multi';
 
     const dgOptions: Record<string, unknown> = {
       model: 'nova-3',
