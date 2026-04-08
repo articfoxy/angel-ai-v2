@@ -62,7 +62,8 @@ const OWNER_LANGUAGES = [
 ];
 
 type VoiceOption = { id: string; name: string; description: string; language: string };
-type AudioRoute = 'auto' | 'speaker' | 'bluetooth';
+type MicSource = 'auto' | 'phone' | 'bluetooth';
+type OutputDevice = 'auto' | 'speaker' | 'bluetooth';
 
 export function SettingsScreen() {
   const insets = useSafeAreaInsets();
@@ -85,7 +86,8 @@ export function SettingsScreen() {
   const [voices, setVoices] = useState<VoiceOption[]>([]);
   const [selectedVoice, setSelectedVoice] = useState<string>('');
   const [voicesLoading, setVoicesLoading] = useState(false);
-  const [audioRoute, setAudioRoute] = useState<AudioRoute>('auto');
+  const [micSource, setMicSource] = useState<MicSource>('auto');
+  const [outputDevice, setOutputDevice] = useState<OutputDevice>('auto');
 
   const version = Constants.expoConfig?.version || '2.0.0';
   const buildNumber = Constants.expoConfig?.ios?.buildNumber || '';
@@ -106,9 +108,11 @@ export function SettingsScreen() {
     setVoicesLoading(false);
   }, []);
 
-  const loadAudioRoute = React.useCallback(async () => {
-    const saved = await SecureStore.getItemAsync('angel_v2_audio_route');
-    if (saved === 'speaker' || saved === 'bluetooth') setAudioRoute(saved);
+  const loadAudioDevices = React.useCallback(async () => {
+    const mic = await SecureStore.getItemAsync('angel_v2_mic_source');
+    if (mic === 'phone' || mic === 'bluetooth') setMicSource(mic);
+    const out = await SecureStore.getItemAsync('angel_v2_output_device');
+    if (out === 'speaker' || out === 'bluetooth') setOutputDevice(out);
   }, []);
 
   const loadSelectedVoice = React.useCallback(async () => {
@@ -121,9 +125,9 @@ export function SettingsScreen() {
     loadVoiceprintStatus();
     loadSpeechSettings();
     loadVoices();
-    loadAudioRoute();
+    loadAudioDevices();
     loadSelectedVoice();
-  }, [loadVoiceprintStatus, loadVoices, loadAudioRoute, loadSelectedVoice]);
+  }, [loadVoiceprintStatus, loadVoices, loadAudioDevices, loadSelectedVoice]);
 
   const loadSpeechSettings = async () => {
     const locale = await SecureStore.getItemAsync('angel_v2_speech_locale');
@@ -180,9 +184,14 @@ export function SettingsScreen() {
     await SecureStore.setItemAsync('angel_v2_voice_id', voiceId);
   };
 
-  const saveAudioRoute = async (route: AudioRoute) => {
-    setAudioRoute(route);
-    await SecureStore.setItemAsync('angel_v2_audio_route', route);
+  const saveMicSource = async (source: MicSource) => {
+    setMicSource(source);
+    await SecureStore.setItemAsync('angel_v2_mic_source', source);
+  };
+
+  const saveOutputDevice = async (device: OutputDevice) => {
+    setOutputDevice(device);
+    await SecureStore.setItemAsync('angel_v2_output_device', device);
   };
 
   const loadKeys = async () => {
@@ -533,12 +542,44 @@ export function SettingsScreen() {
         {/* Audio Device */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Audio Device</Text>
+
           <View style={styles.card}>
-            <Text style={styles.cardLabel}>Microphone & Output</Text>
-            <Text style={styles.cardDesc}>Choose where Angel listens and speaks.</Text>
+            <Text style={styles.cardLabel}>Microphone Input</Text>
+            <Text style={styles.cardDesc}>Where Angel listens from.</Text>
             <View style={styles.presetGrid}>
               {([
-                { key: 'auto' as const, label: 'Auto', icon: 'phone-portrait-outline' },
+                { key: 'auto' as const, label: 'Auto', icon: 'swap-horizontal-outline' },
+                { key: 'phone' as const, label: 'Phone Mic', icon: 'phone-portrait-outline' },
+                { key: 'bluetooth' as const, label: 'AirPods / BT', icon: 'bluetooth-outline' },
+              ]).map((opt) => (
+                <TouchableOpacity
+                  key={opt.key}
+                  style={[
+                    styles.presetChip,
+                    micSource === opt.key && styles.presetChipActive,
+                  ]}
+                  onPress={() => saveMicSource(opt.key)}
+                >
+                  <Ionicons
+                    name={opt.icon as any}
+                    size={14}
+                    color={micSource === opt.key ? colors.primary : colors.textSecondary}
+                  />
+                  <Text style={[
+                    styles.presetLabel,
+                    micSource === opt.key && styles.presetLabelActive,
+                  ]}>{opt.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
+          <View style={styles.card}>
+            <Text style={styles.cardLabel}>Audio Output</Text>
+            <Text style={styles.cardDesc}>Where Angel speaks to you.</Text>
+            <View style={styles.presetGrid}>
+              {([
+                { key: 'auto' as const, label: 'Auto', icon: 'swap-horizontal-outline' },
                 { key: 'bluetooth' as const, label: 'AirPods / BT', icon: 'bluetooth-outline' },
                 { key: 'speaker' as const, label: 'Speaker', icon: 'volume-high-outline' },
               ]).map((opt) => (
@@ -546,18 +587,18 @@ export function SettingsScreen() {
                   key={opt.key}
                   style={[
                     styles.presetChip,
-                    audioRoute === opt.key && styles.presetChipActive,
+                    outputDevice === opt.key && styles.presetChipActive,
                   ]}
-                  onPress={() => saveAudioRoute(opt.key)}
+                  onPress={() => saveOutputDevice(opt.key)}
                 >
                   <Ionicons
                     name={opt.icon as any}
                     size={14}
-                    color={audioRoute === opt.key ? colors.primary : colors.textSecondary}
+                    color={outputDevice === opt.key ? colors.primary : colors.textSecondary}
                   />
                   <Text style={[
                     styles.presetLabel,
-                    audioRoute === opt.key && styles.presetLabelActive,
+                    outputDevice === opt.key && styles.presetLabelActive,
                   ]}>{opt.label}</Text>
                 </TouchableOpacity>
               ))}

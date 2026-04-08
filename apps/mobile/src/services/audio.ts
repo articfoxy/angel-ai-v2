@@ -25,7 +25,8 @@ import {
 let currentGain = 2.0;
 let isCurrentlyRecording = false;
 let audioSubscription: EventSubscription | null = null;
-let currentAudioRoute: 'auto' | 'speaker' | 'bluetooth' = 'auto';
+let currentMicSource: 'auto' | 'phone' | 'bluetooth' = 'auto';
+let currentOutputDevice: 'auto' | 'speaker' | 'bluetooth' = 'auto';
 
 // ─── GAIN CONTROL ───
 
@@ -41,13 +42,16 @@ export function getGain(): number {
   return currentGain;
 }
 
-export function setAudioRoute(route: 'auto' | 'speaker' | 'bluetooth') {
-  currentAudioRoute = route;
+export function setMicSource(source: 'auto' | 'phone' | 'bluetooth') {
+  currentMicSource = source;
 }
 
-export function getAudioRoute() {
-  return currentAudioRoute;
+export function setOutputDevice(device: 'auto' | 'speaker' | 'bluetooth') {
+  currentOutputDevice = device;
 }
+
+export function getMicSource() { return currentMicSource; }
+export function getOutputDevice() { return currentOutputDevice; }
 
 /**
  * Amplify 16-bit little-endian PCM samples.
@@ -77,6 +81,35 @@ function b64ToBytes(b64: string): Uint8Array {
   const buf = new Uint8Array(raw.length);
   for (let i = 0; i < raw.length; i++) buf[i] = raw.charCodeAt(i);
   return buf;
+}
+
+// ─── AUDIO ROUTING ───
+
+/**
+ * Build iOS AVAudioSession categoryOptions based on user's mic + output preferences.
+ *
+ * AllowBluetooth  → enables HFP (mic + output through BT, lower quality)
+ * AllowBluetoothA2DP → enables A2DP (high-quality BT output, no BT mic)
+ * DefaultToSpeaker → routes output to speaker when no BT connected
+ */
+function buildCategoryOptions(): string[] {
+  const opts: string[] = [];
+
+  // Mic: bluetooth → need HFP (AllowBluetooth)
+  const wantBtMic = currentMicSource === 'bluetooth' || currentMicSource === 'auto';
+  // Output: bluetooth → need A2DP or HFP
+  const wantBtOutput = currentOutputDevice === 'bluetooth' || currentOutputDevice === 'auto';
+  // Output: speaker → DefaultToSpeaker
+  const wantSpeaker = currentOutputDevice === 'speaker' || currentOutputDevice === 'auto';
+
+  if (wantBtMic) opts.push('AllowBluetooth');
+  if (wantBtOutput) opts.push('AllowBluetoothA2DP');
+  if (wantSpeaker) opts.push('DefaultToSpeaker');
+
+  // Ensure at least one option
+  if (opts.length === 0) opts.push('DefaultToSpeaker');
+
+  return opts;
 }
 
 // ─── PUBLIC API ───
@@ -140,11 +173,7 @@ export async function startRecording(
     ios: {
       audioSession: {
         category: 'PlayAndRecord',
-        categoryOptions: currentAudioRoute === 'speaker'
-          ? ['DefaultToSpeaker']
-          : currentAudioRoute === 'bluetooth'
-            ? ['AllowBluetooth', 'AllowBluetoothA2DP']
-            : ['DefaultToSpeaker', 'AllowBluetooth', 'AllowBluetoothA2DP'],
+        categoryOptions: buildCategoryOptions(),
         mode: 'Default',
       },
     },

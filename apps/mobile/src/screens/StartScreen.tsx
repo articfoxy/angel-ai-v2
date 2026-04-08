@@ -29,7 +29,7 @@ import { SessionCard } from '../components/SessionCard';
 import { useAuth } from '../hooks/useAuth';
 import { useApi } from '../hooks/useApi';
 import { connectSocket, disconnectSocket, getSocket, onSocketStateChange } from '../services/socket';
-import { requestMicPermission, startRecording, stopRecording, setGain, getGain, setAudioRoute } from '../services/audio';
+import { requestMicPermission, startRecording, stopRecording, setGain, getGain, setMicSource, setOutputDevice } from '../services/audio';
 import { api } from '../services/api';
 import { getTTSPlayer, disposeTTSPlayer } from '../services/ttsPlayer';
 import { colors, spacing, fontSize, radius } from '../theme';
@@ -426,13 +426,11 @@ export function StartScreen() {
           startPayload.voiceId = savedVoice;
         }
 
-        // Load audio route preference before recording starts
-        const savedRoute = await SecureStore.getItemAsync('angel_v2_audio_route');
-        if (savedRoute === 'speaker' || savedRoute === 'bluetooth') {
-          setAudioRoute(savedRoute);
-        } else {
-          setAudioRoute('auto');
-        }
+        // Load audio device preferences before recording starts
+        const savedMic = await SecureStore.getItemAsync('angel_v2_mic_source');
+        setMicSource(savedMic === 'phone' || savedMic === 'bluetooth' ? savedMic : 'auto');
+        const savedOutput = await SecureStore.getItemAsync('angel_v2_output_device');
+        setOutputDevice(savedOutput === 'speaker' || savedOutput === 'bluetooth' ? savedOutput : 'auto');
 
         // Cache the full payload for reconnect and register listeners BEFORE
         // emitting so we don't miss any fast server responses.
