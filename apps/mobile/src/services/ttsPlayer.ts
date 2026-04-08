@@ -212,6 +212,11 @@ class TTSPlayer {
   get activeWhisperId(): string | null {
     return this.currentWhisperId;
   }
+
+  /** Update callbacks without replacing the instance (e.g. after reconnect). */
+  updateConfig(config: TTSPlayerConfig): void {
+    this.config = { ...this.config, ...config };
+  }
 }
 
 // Singleton instance
@@ -220,6 +225,9 @@ let instance: TTSPlayer | null = null;
 export function getTTSPlayer(config?: TTSPlayerConfig): TTSPlayer {
   if (!instance) {
     instance = new TTSPlayer(config);
+  } else if (config) {
+    // Update callbacks on existing instance (e.g. after reconnect)
+    instance.updateConfig(config);
   }
   return instance;
 }

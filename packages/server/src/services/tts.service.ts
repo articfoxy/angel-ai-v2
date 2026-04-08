@@ -60,10 +60,13 @@ export class CartesiaTTSService {
    * Open a persistent WebSocket connection to Cartesia's TTS API.
    * Resolves once the connection is open; rejects on timeout or error.
    */
-  async connect(): Promise<void> {
+  async connect(isReconnect = false): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.intentionallyClosed = false;
-      this.reconnectAttempts = 0;
+      // Only reset flags on user-initiated connects, not auto-reconnects
+      if (!isReconnect) {
+        this.intentionallyClosed = false;
+        this.reconnectAttempts = 0;
+      }
 
       // Clean up any stale connection before opening a new one
       if (this.ws) {
@@ -296,7 +299,7 @@ export class CartesiaTTSService {
       if (this.intentionallyClosed) return;
 
       try {
-        await this.connect();
+        await this.connect(true);
         console.log('[TTS] Reconnected successfully');
         return;
       } catch (err) {

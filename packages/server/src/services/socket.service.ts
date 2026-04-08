@@ -681,8 +681,8 @@ export function setupSocketHandlers(io: Server) {
       console.log(`Session stopped: ${sessionId}`);
     });
 
-    socket.on('disconnect', () => {
-      cleanupSession();
+    socket.on('disconnect', async () => {
+      await cleanupSession();
       console.log(`Client disconnected: ${socket.userId}`);
     });
   });

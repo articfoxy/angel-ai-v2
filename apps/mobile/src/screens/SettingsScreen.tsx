@@ -18,6 +18,7 @@ import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import { useAuth } from '../hooks/useAuth';
 import { api } from '../services/api';
+import { getStoredToken } from '../services/auth';
 import { API_URL } from '../config';
 import { VoiceEnrollment } from '../components/VoiceEnrollment';
 import { colors, spacing, fontSize } from '../theme';
@@ -183,10 +184,14 @@ export function SettingsScreen() {
 
     setPlayingVoiceId(voiceId);
     try {
-      // Fetch WAV from server (with abort controller for concurrent call safety)
+      // Fetch WAV from server (with abort controller + auth)
       const abort = new AbortController();
       previewAbortRef.current = abort;
-      const response = await fetch(`${API_URL}/api/voices/preview/${voiceId}`, { signal: abort.signal });
+      const token = await getStoredToken();
+      const response = await fetch(`${API_URL}/api/voices/preview/${voiceId}`, {
+        signal: abort.signal,
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (!response.ok) {
         Alert.alert('Preview Failed', `Server returned ${response.status}`);
         setPlayingVoiceId(null);
@@ -211,8 +216,11 @@ export function SettingsScreen() {
         }
       }
 
+      // Clamp dataSize to actual buffer bounds to prevent RangeError on truncated WAV
+      const actualDataSize = Math.min(dataSize, arrayBuffer.byteLength - dataOffset);
+
       // Convert 16-bit signed LE PCM → Float32 [-1, 1]
-      const pcmBytes = new Uint8Array(arrayBuffer, dataOffset, dataSize);
+      const pcmBytes = new Uint8Array(arrayBuffer, dataOffset, actualDataSize);
       const int16 = new Int16Array(pcmBytes.buffer, pcmBytes.byteOffset, Math.floor(pcmBytes.byteLength / 2));
       const float32 = new Float32Array(int16.length);
       for (let i = 0; i < int16.length; i++) {

@@ -82,13 +82,10 @@ export async function connectSocket(): Promise<Socket> {
     console.warn('[socket] connect_error:', err.message);
   });
 
-  socket.io.on('reconnect', async (attemptNumber) => {
+  socket.io.on('reconnect', (attemptNumber) => {
     console.log('[socket] reconnected after', attemptNumber, 'attempts');
-    // Re-fetch latest token in case it was refreshed while disconnected
-    const freshToken = await getStoredToken();
-    if (socket && freshToken) {
-      socket.auth = { token: freshToken };
-    }
+    // Keep auth as an async callback so socket.io fetches a fresh token
+    // on each subsequent reconnect (don't overwrite with a static object)
     notifyStateChange(true);
   });
 

@@ -503,5 +503,7 @@ export class DeepgramService {
     }
     this.ready = false;
     this.audioBuffer = [];
+    this.speakerAudioBuffers.clear();
+    this.audioTimestamps = [];
   }
 }

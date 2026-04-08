@@ -125,9 +125,9 @@ app.get('/debug/deepgram', authenticateToken, async (_, res) => {
 
 // Public routes (no auth middleware)
 app.use('/api/auth', authRouter);
-app.use('/api/voices', voicesRouter);
 
 // Protected routes
+app.use('/api/voices', authenticateToken, voicesRouter);
 app.use('/api/sessions', authenticateToken, sessionsRouter);
 app.use('/api/memory', authenticateToken, memoryRouter);
 app.use('/api/skills', authenticateToken, skillsRouter);
