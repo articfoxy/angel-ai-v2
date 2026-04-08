@@ -10,7 +10,7 @@ import { decode as b64Decode } from 'base-64';
 
 const SAMPLE_RATE = 24000; // Cartesia outputs 24kHz
 const NUM_CHANNELS = 1;    // Mono
-const PRE_BUFFER_CHUNKS = 2; // Buffer 2 chunks before starting playback
+const PRE_BUFFER_CHUNKS = 4; // Buffer 4 chunks (~2s) before starting playback
 
 interface TTSPlayerConfig {
   onPlaybackStart?: (whisperId: string) => void;
@@ -26,6 +26,8 @@ class TTSPlayer {
   private isPlaying = false;
   private chunksReceived = 0;
   private playbackStarted = false;
+  private allChunksSent = false; // true after tts:done (finishWhisper)
+  private endedWhileStreaming = false; // onEnded fired before all chunks arrived
 
   constructor(config: TTSPlayerConfig = {}) {
     this.config = config;
@@ -53,6 +55,8 @@ class TTSPlayer {
     this.chunkBuffer = [];
     this.chunksReceived = 0;
     this.playbackStarted = false;
+    this.allChunksSent = false;
+    this.endedWhileStreaming = false;
     this.isPlaying = true;
 
     // Create a fresh queue source node
@@ -60,12 +64,20 @@ class TTSPlayer {
       this.queueSource = this.audioContext.createBufferQueueSource();
       this.queueSource.connect(this.audioContext.destination);
       this.queueSource.onEnded = () => {
-        if (this.isPlaying && this.currentWhisperId) {
-          console.log('[TTS] Playback finished:', this.currentWhisperId);
+        if (!this.isPlaying || !this.currentWhisperId) return;
+
+        if (this.allChunksSent) {
+          // All chunks were received and played — genuine end of playback
+          console.log('[TTS] Playback finished:', this.currentWhisperId, 'chunks:', this.chunksReceived);
           const id = this.currentWhisperId;
           this.isPlaying = false;
           this.currentWhisperId = null;
           this.config.onPlaybackDone?.(id);
+        } else {
+          // Buffer underrun — queue ran dry but more chunks are expected.
+          // Mark it so finishWhisper() can trigger completion later.
+          console.log('[TTS] Buffer underrun (queue empty, waiting for more chunks):', this.currentWhisperId);
+          this.endedWhileStreaming = true;
         }
       };
     }
@@ -92,6 +104,13 @@ class TTSPlayer {
       const audioBuffer = this.decodeBase64PCM(base64Audio);
       if (audioBuffer) {
         this.enqueueAudio(audioBuffer);
+      }
+
+      // If we had an underrun and the source stopped, we need to restart it
+      if (this.endedWhileStreaming) {
+        console.log('[TTS] Restarting after underrun, chunk:', this.chunksReceived);
+        this.endedWhileStreaming = false;
+        try { this.queueSource.start(); } catch {}
       }
     }
   }
@@ -157,11 +176,23 @@ class TTSPlayer {
   finishWhisper(whisperId: string): void {
     if (whisperId !== this.currentWhisperId) return;
 
+    this.allChunksSent = true;
+
     if (!this.playbackStarted && this.chunkBuffer.length > 0) {
       // Didn't reach pre-buffer threshold — flush what we have
       this.flushBufferAndStart();
     }
-    // The onEnded callback will fire when all audio finishes playing
+
+    // If onEnded already fired during a buffer underrun (all chunks are now in),
+    // the audio has actually finished — trigger completion immediately.
+    if (this.endedWhileStreaming) {
+      console.log('[TTS] All chunks sent + queue already empty — finishing:', whisperId);
+      const id = this.currentWhisperId;
+      this.isPlaying = false;
+      this.currentWhisperId = null;
+      this.config.onPlaybackDone?.(id);
+    }
+    // Otherwise, onEnded will fire naturally when the last buffer plays out
   }
 
   /**
@@ -182,6 +213,8 @@ class TTSPlayer {
     this.chunkBuffer = [];
     this.chunksReceived = 0;
     this.playbackStarted = false;
+    this.allChunksSent = false;
+    this.endedWhileStreaming = false;
 
     // Notify server that playback ended (so echo gate can be released)
     if (id && wasPlaying && this.config.onPlaybackDone) {
