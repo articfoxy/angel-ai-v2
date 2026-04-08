@@ -61,6 +61,12 @@ export class RealtimeService {
       this.sessionActive = true;
       this.sessionConfigured = false;
 
+      // Close any existing WebSocket to prevent orphaning on reconnect (Finding 3)
+      if (this.ws) {
+        try { this.ws.removeAllListeners(); this.ws.close(); } catch {}
+        this.ws = null;
+      }
+
       console.log('[Realtime] Connecting to:', REALTIME_URL);
       console.log('[Realtime] API key prefix:', this.config.apiKey.substring(0, 12) + '...');
 
@@ -197,7 +203,7 @@ export class RealtimeService {
    * Request the model to analyze recent conversation and respond.
    */
   requestResponse(): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || this.responseInProgress) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || this.responseInProgress || !this.sessionConfigured) return;
 
     this.responseInProgress = true;
     this.linesSinceLastResponse = 0;
@@ -217,8 +223,8 @@ export class RealtimeService {
    * Force an immediate response (angel:activate).
    */
   forceRespond(): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.warn('[Realtime] forceRespond called but WS not open');
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.sessionConfigured) {
+      console.warn('[Realtime] forceRespond called but WS not ready (open:', this.ws?.readyState === WebSocket.OPEN, 'configured:', this.sessionConfigured, ')');
       return;
     }
 
@@ -285,17 +291,19 @@ export class RealtimeService {
     switch (event.type) {
       case 'session.created':
         console.log('[Realtime] Session created:', event.session?.id);
-        // Flush any pending transcript (clear before iterating to avoid mutation)
-        const pending = this.pendingTranscript;
-        this.pendingTranscript = [];
-        for (const line of pending) {
-          this.feedTranscript(line);
-        }
         break;
 
       case 'session.updated':
         console.log('[Realtime] Session configured successfully');
         this.sessionConfigured = true;
+        // Flush pending transcript now that session is fully configured with instructions
+        if (this.pendingTranscript.length > 0) {
+          const pending = this.pendingTranscript;
+          this.pendingTranscript = [];
+          for (const line of pending) {
+            this.feedTranscript(line);
+          }
+        }
         break;
 
       case 'response.created':
@@ -443,6 +451,12 @@ export class RealtimeService {
   private async attemptReconnect(): Promise<void> {
     if (this.reconnecting || !this.sessionActive) return;
     this.reconnecting = true;
+
+    // Close existing WebSocket to prevent orphaning
+    if (this.ws) {
+      try { this.ws.removeAllListeners(); this.ws.close(); } catch {}
+      this.ws = null;
+    }
 
     for (let i = 0; i < MAX_RECONNECT_ATTEMPTS; i++) {
       if (!this.sessionActive) break;

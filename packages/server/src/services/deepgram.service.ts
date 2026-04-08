@@ -18,8 +18,6 @@ interface DeepgramConfig {
   voiceprint?: any | null;  // AudioFeatures from voiceprint enrollment
   sessionId: string;
   userId: string;
-  /** Deepgram language code, e.g. "en", "en-US", "en-GB", "en-IN", "en-AU" */
-  language?: string;
   /** Keywords to boost recognition for, e.g. ["kubernetes:2", "LTV:CAC:1.5"] */
   keywords?: string[];
 }
@@ -48,11 +46,14 @@ export class DeepgramService {
   private lastAudioTime: number = 0;
   private reconnecting = false;
   private reconnectAttempts = 0;
+  private totalReconnectCycles = 0;
+  private lastReconnectSuccessTime = 0;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private lastTranscriptTime: number = 0;
   private sessionActive = true;
   private speakerAudioBuffers: Map<number, Buffer[]> = new Map();
   private audioTimestamps: { buffer: Buffer; timestamp: number }[] = [];
+  private episodeWriteErrors = 0;
 
   constructor(config: DeepgramConfig) {
     this.config = config;
@@ -230,7 +231,14 @@ export class DeepgramService {
             startTime,
             endTime,
           },
-        }).catch((err: Error) => console.error('Episode save error:', err));
+        }).catch((err: Error) => {
+          this.episodeWriteErrors++;
+          console.error(`[Deepgram] Episode save error (#${this.episodeWriteErrors}):`, err.message);
+          if (this.episodeWriteErrors === 5) {
+            console.warn(`[Deepgram] ${this.episodeWriteErrors} episode write failures — transcript data may be lost`);
+            this.config.onError?.('Some transcript data could not be saved. Session will continue.');
+          }
+        });
 
         // Track pending writes so we can await them before closing
         this.pendingWrites.push(writePromise);
@@ -385,6 +393,22 @@ export class DeepgramService {
 
   private async attemptReconnect(): Promise<void> {
     if (this.reconnecting || !this.sessionActive) return;
+
+    // Cap total reconnect cycles per session to prevent infinite reconnect loops
+    this.totalReconnectCycles++;
+    if (this.totalReconnectCycles > 10) {
+      console.error(`[Deepgram] Max total reconnect cycles (10) exceeded for session ${this.config.sessionId}`);
+      this.config.onConnectionStatus?.('disconnected');
+      this.config.onError?.('Transcription connection unstable. Please restart the session.');
+      return;
+    }
+
+    // Cooldown: don't reconnect if last success was <5s ago (likely flapping)
+    if (this.lastReconnectSuccessTime && Date.now() - this.lastReconnectSuccessTime < 5000) {
+      console.warn(`[Deepgram] Reconnect cooldown — last success was ${Date.now() - this.lastReconnectSuccessTime}ms ago`);
+      return;
+    }
+
     this.reconnecting = true;
     this.stopHeartbeat();
 
@@ -409,6 +433,7 @@ export class DeepgramService {
         await this.connect();
         this.reconnecting = false;
         this.reconnectAttempts = 0;
+        this.lastReconnectSuccessTime = Date.now();
         this.config.onConnectionStatus?.('connected');
         console.log(`[Deepgram] Reconnected successfully for session ${this.config.sessionId}`);
         return;

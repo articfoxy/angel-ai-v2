@@ -388,17 +388,13 @@ export function StartScreen() {
           startPayload.byok = { provider: byokProvider, apiKey: byokKey };
         }
 
-        // Load speech recognition settings (locale + keywords)
-        const speechLocale = await SecureStore.getItemAsync('angel_v2_speech_locale');
+        // Load speech recognition settings (keywords for boosting)
         const keywordsRaw = await SecureStore.getItemAsync('angel_v2_speech_keywords');
         const keywords = keywordsRaw
           ? keywordsRaw.split('\n').map(k => k.trim()).filter(Boolean)
           : undefined;
-        if (speechLocale || keywords) {
-          startPayload.speech = {
-            ...(speechLocale ? { language: speechLocale } : {}),
-            ...(keywords && keywords.length > 0 ? { keywords } : {}),
-          };
+        if (keywords && keywords.length > 0) {
+          startPayload.speech = { keywords };
         }
 
         // Load Angel Instructions (presets + custom) — wrapped in try/catch

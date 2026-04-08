@@ -11,6 +11,7 @@ import { runPostSessionReflection } from './memory/reflection.service';
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
 const MAX_SESSION_DURATION_MS = 7_200_000; // 2 hours
 const IDLE_TIMEOUT_MS = 300_000; // 5 minutes with no new transcript
+const ALLOWED_OWNER_LANGUAGES = ['English', 'Chinese', 'Malay', 'Spanish', 'French', 'Japanese', 'Korean', 'Hindi'];
 
 interface AuthenticatedSocket extends Socket {
   userId?: string;
@@ -136,14 +137,23 @@ export function setupSocketHandlers(io: Server) {
       clearAllTimers();
       angelProcessing = false;
       if (angelThinkingTimer) { clearTimeout(angelThinkingTimer); angelThinkingTimer = null; }
+
+      // Close services in parallel for faster cleanup
+      const closePromises: Promise<void>[] = [];
       if (realtime) {
-        await realtime.close();
+        const rt = realtime;
         realtime = null;
+        closePromises.push(rt.close().catch((err: any) => console.error('[cleanup] Realtime close error:', err)));
       }
       if (deepgram) {
-        await deepgram.close();
+        const dg = deepgram;
         deepgram = null;
+        closePromises.push(dg.close().catch((err: any) => console.error('[cleanup] Deepgram close error:', err)));
       }
+      if (closePromises.length > 0) {
+        await Promise.allSettled(closePromises);
+      }
+
       transcriptBuffer = [];
       currentSessionId = null;
     }
@@ -151,7 +161,7 @@ export function setupSocketHandlers(io: Server) {
     socket.on('session:start', async (payload: {
       sessionId: string;
       byok?: { provider: string; apiKey: string; model?: string };
-      speech?: { language?: string; keywords?: string[] };
+      speech?: { keywords?: string[] };
       instructions?: string;
       ownerLanguage?: string;
     }) => {
@@ -174,6 +184,17 @@ export function setupSocketHandlers(io: Server) {
       currentSessionId = sessionId;
       const userId = socket.userId;
 
+      // Validate BYOK key format if provided
+      if (payload.byok?.apiKey) {
+        const keyStr = String(payload.byok.apiKey).trim();
+        if (keyStr.length < 10 || keyStr.length > 200 || /[\s\x00-\x1f]/.test(keyStr)) {
+          console.warn(`[session] Invalid BYOK key format from user ${socket.userId}`);
+          socket.emit('session:error', { sessionId, message: 'Invalid API key format' });
+          await cleanupSession();
+          return;
+        }
+      }
+
       // Initialize OpenAI Realtime API for always-active Angel
       const openaiKey = payload.byok?.provider === 'openai' && payload.byok?.apiKey
         ? payload.byok.apiKey
@@ -181,7 +202,9 @@ export function setupSocketHandlers(io: Server) {
 
       if (openaiKey) {
         const userInstructions = payload.instructions || 'Help me with jargon and provide useful insights.';
-        const ownerLanguage = payload.ownerLanguage || 'English';
+        const ownerLanguage = ALLOWED_OWNER_LANGUAGES.includes(payload.ownerLanguage as string)
+          ? (payload.ownerLanguage as string)
+          : 'English';
         console.log(`[session] Owner language: ${ownerLanguage}, Instructions length: ${userInstructions.length}`);
         realtime = new RealtimeService({
           apiKey: openaiKey,
@@ -234,7 +257,7 @@ export function setupSocketHandlers(io: Server) {
           // Buffer transcript for whisper generation
           if (data.isFinal && data.text.trim()) {
             const label = data.speakerLabel || data.speaker || 'Unknown';
-            transcriptBuffer.push(`[${label}]: ${data.text}`);
+            transcriptBuffer.push(`[${label}]: ${data.text.slice(0, 500)}`);
             if (transcriptBuffer.length > 60) {
               transcriptBuffer = transcriptBuffer.slice(-40);
             }
@@ -253,8 +276,12 @@ export function setupSocketHandlers(io: Server) {
                 angelProcessing = true;
                 socket.emit('angel:thinking', { active: true });
 
+                // Clear any existing thinking timer before setting new one
+                if (angelThinkingTimer) { clearTimeout(angelThinkingTimer); }
                 // Small delay to let the owner finish their sentence, then force respond
                 const wakeDelayTimer = setTimeout(async () => {
+                  // Guard: if angel was deactivated while waiting, don't proceed
+                  if (!angelProcessing) return;
                   try {
                     if (realtime) {
                       realtime.forceRespond();
@@ -263,10 +290,11 @@ export function setupSocketHandlers(io: Server) {
                     console.error('[agent] Wake word response error:', err);
                   }
                   // forceRespond is async via WebSocket — set max thinking indicator
-                  // Clear the outer reference before setting the new timeout
                   angelThinkingTimer = setTimeout(() => {
-                    angelProcessing = false;
-                    socket.emit('angel:thinking', { active: false });
+                    if (angelProcessing) {
+                      angelProcessing = false;
+                      socket.emit('angel:thinking', { active: false });
+                    }
                     angelThinkingTimer = null;
                   }, 5000);
                 }, 2000); // 2s delay to capture the full sentence after the wake word
@@ -288,7 +316,6 @@ export function setupSocketHandlers(io: Server) {
         voiceprint: voiceprintRecord?.features ?? null,
         sessionId,
         userId,
-        language: payload.speech?.language,
         keywords: payload.speech?.keywords,
       });
 
@@ -415,32 +442,21 @@ export function setupSocketHandlers(io: Server) {
         return;
       }
 
-      // Clean up timers, Realtime, and Deepgram
-      clearAllTimers();
-
-      // Close Realtime API connection
-      if (realtime) {
-        await realtime.close();
-        realtime = null;
-      }
-
-      // Grab speakers before closing Deepgram
+      // Grab speakers and flush episodes BEFORE cleanup closes connections
       const speakers = deepgram ? deepgram.getSpeakers() : {};
+      if (deepgram) await deepgram.flush();
+      const userId = socket.userId;
 
-      if (deepgram) {
-        // Await close to flush all pending episode writes before extraction
-        await deepgram.close();
-        deepgram = null;
-      }
+      // Use shared cleanup (closes realtime, deepgram, clears timers + state)
+      await cleanupSession();
 
-      if (socket.userId) {
+      if (userId) {
         await prisma.session.update({
           where: { id: sessionId },
           data: { endedAt: new Date(), status: 'processing', speakers },
         });
 
         // Post-session: extract memories, entities, reflections
-        const userId = socket.userId;
         const extraction = new ExtractionService();
         extraction.processSession(sessionId, userId).then(async (extractionResult) => {
           const summary = extractionResult?.summary || 'Session completed';
@@ -476,10 +492,6 @@ export function setupSocketHandlers(io: Server) {
         });
       }
 
-      transcriptBuffer = [];
-      currentSessionId = null;
-      angelProcessing = false;
-      if (angelThinkingTimer) { clearTimeout(angelThinkingTimer); angelThinkingTimer = null; }
       console.log(`Session stopped: ${sessionId}`);
     });
 

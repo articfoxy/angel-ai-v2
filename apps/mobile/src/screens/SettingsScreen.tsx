@@ -50,17 +50,6 @@ const OWNER_LANGUAGES = [
   { code: 'Hindi', flag: '🇮🇳' },
 ];
 
-const ENGLISH_LOCALES = [
-  { code: 'en', label: 'General', flag: '🌐' },
-  { code: 'en-US', label: 'US', flag: '🇺🇸' },
-  { code: 'en-GB', label: 'UK', flag: '🇬🇧' },
-  { code: 'en-AU', label: 'Australia', flag: '🇦🇺' },
-  { code: 'en-IN', label: 'India', flag: '🇮🇳' },
-  { code: 'en-SG', label: 'Singapore', flag: '🇸🇬' },
-  { code: 'en-NZ', label: 'NZ', flag: '🇳🇿' },
-  { code: 'en-IE', label: 'Ireland', flag: '🇮🇪' },
-];
-
 export function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const { user, logout } = useAuth();
@@ -74,7 +63,6 @@ export function SettingsScreen() {
   const [byok, setByok] = useState(false);
   const [testingKey, setTestingKey] = useState<ModelProvider | null>(null);
   const [voiceprintEnrolled, setVoiceprintEnrolled] = useState(false);
-  const [speechLocale, setSpeechLocale] = useState('en');
   const [keywordsText, setKeywordsText] = useState('');
   const [angelInstructions, setAngelInstructions] = useState('');
   const [activePresets, setActivePresets] = useState<string[]>([]);
@@ -97,8 +85,6 @@ export function SettingsScreen() {
   }, [loadVoiceprintStatus]);
 
   const loadSpeechSettings = async () => {
-    const locale = await SecureStore.getItemAsync('angel_v2_speech_locale');
-    if (locale) setSpeechLocale(locale);
     const kw = await SecureStore.getItemAsync('angel_v2_speech_keywords');
     if (kw) setKeywordsText(kw);
     // Load Owner Language
@@ -134,11 +120,6 @@ export function SettingsScreen() {
   const saveOwnerLanguage = async (lang: string) => {
     setOwnerLanguage(lang);
     await SecureStore.setItemAsync('angel_v2_owner_language', lang);
-  };
-
-  const saveSpeechLocale = async (locale: string) => {
-    setSpeechLocale(locale);
-    await SecureStore.setItemAsync('angel_v2_speech_locale', locale);
   };
 
   const saveKeywords = async () => {
@@ -459,31 +440,6 @@ export function SettingsScreen() {
           <Text style={styles.sectionTitle}>Speech Recognition</Text>
 
           <View style={styles.card}>
-            <Text style={styles.cardLabel}>English Accent</Text>
-            <Text style={styles.cardDesc}>Choose the closest match for better accuracy</Text>
-            <View style={styles.localeGrid}>
-              {ENGLISH_LOCALES.map((loc) => (
-                <TouchableOpacity
-                  key={loc.code}
-                  style={[
-                    styles.localeChip,
-                    speechLocale === loc.code && styles.localeChipActive,
-                  ]}
-                  onPress={() => saveSpeechLocale(loc.code)}
-                >
-                  <Text style={styles.localeFlag}>{loc.flag}</Text>
-                  <Text style={[
-                    styles.localeLabel,
-                    speechLocale === loc.code && styles.localeLabelActive,
-                  ]}>
-                    {loc.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-
-          <View style={styles.card}>
             <Text style={styles.cardLabel}>Keyword Boosting</Text>
             <Text style={styles.cardDesc}>
               Add words Angel often mishears, one per line. Improves recognition for names, jargon, etc.
@@ -718,30 +674,6 @@ const styles = StyleSheet.create({
   presetIcon: { fontSize: 14 },
   presetLabel: { color: colors.textSecondary, fontSize: fontSize.xs, fontWeight: '600', flexShrink: 1 },
   presetLabelActive: { color: colors.primary },
-  localeGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-  },
-  localeChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: spacing.sm + 2,
-    paddingVertical: spacing.xs + 2,
-    borderRadius: 20,
-    backgroundColor: colors.surfaceHover,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  localeChipActive: {
-    borderColor: colors.primary,
-    backgroundColor: colors.primaryMuted,
-  },
-  localeFlag: { fontSize: 14 },
-  localeLabel: { color: colors.textSecondary, fontSize: fontSize.xs, fontWeight: '600' },
-  localeLabelActive: { color: colors.primary },
   keywordsInput: {
     backgroundColor: colors.surfaceHover,
     borderRadius: 8,

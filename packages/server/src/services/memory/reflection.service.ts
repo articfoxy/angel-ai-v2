@@ -85,9 +85,10 @@ Return JSON: { "reflections": [{ "content": "...", "importance": 7, "sourceMemor
         }
 
         if (embeddingStr) {
+          // Safe: all values use parameterized placeholders ($1-$6), not string interpolation
           await prisma.$executeRawUnsafe(
             `INSERT INTO "Reflection" (id, "userId", content, embedding, importance, "sourceMemories", "createdAt")
-             VALUES ($1, $2, $3, $4::vector, $5, $6, NOW())`,
+             VALUES ($1, $2, $3, $4::vector, $5, $6::text[], NOW())`,
             randomUUID(),
             userId,
             reflection.content,

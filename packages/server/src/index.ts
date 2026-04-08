@@ -134,6 +134,14 @@ app.use('/api/voiceprint', authenticateToken, voiceprintRouter);
 // Socket.io
 setupSocketHandlers(io);
 
+// Startup safety checks
+if (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'dev-secret') {
+  const level = process.env.NODE_ENV === 'production' ? 'ERROR' : 'WARN';
+  console[level === 'ERROR' ? 'error' : 'warn'](
+    `[${level}] JWT_SECRET is ${!process.env.JWT_SECRET ? 'not set' : '"dev-secret"'} — using insecure fallback. Set a strong JWT_SECRET in production!`
+  );
+}
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Angel AI v2 server running on port ${PORT}`);

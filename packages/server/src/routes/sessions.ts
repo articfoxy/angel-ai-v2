@@ -43,6 +43,19 @@ sessionsRouter.get('/:id', async (req: AuthRequest, res: Response) => {
 // Create session
 sessionsRouter.post('/', async (req: AuthRequest, res: Response) => {
   try {
+    // Enforce concurrent session limit — prevent resource abuse
+    const activeSessions = await prisma.session.count({
+      where: {
+        userId: req.userId!,
+        endedAt: null,
+        status: { notIn: ['ended', 'processing'] },
+      },
+    });
+    if (activeSessions >= 3) {
+      res.status(429).json({ error: 'Too many active sessions. Please end an existing session first.' });
+      return;
+    }
+
     const session = await prisma.session.create({
       data: {
         userId: req.userId!,
