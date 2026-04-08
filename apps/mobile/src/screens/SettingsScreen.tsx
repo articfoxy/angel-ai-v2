@@ -61,6 +61,9 @@ const OWNER_LANGUAGES = [
   { code: 'Hindi', flag: '🇮🇳' },
 ];
 
+type VoiceOption = { id: string; name: string; description: string; language: string };
+type AudioRoute = 'auto' | 'speaker' | 'bluetooth';
+
 export function SettingsScreen() {
   const insets = useSafeAreaInsets();
   const { user, logout } = useAuth();
@@ -79,6 +82,10 @@ export function SettingsScreen() {
   const [angelInstructions, setAngelInstructions] = useState('');
   const [activePresets, setActivePresets] = useState<string[]>([]);
   const [ownerLanguage, setOwnerLanguage] = useState('English');
+  const [voices, setVoices] = useState<VoiceOption[]>([]);
+  const [selectedVoice, setSelectedVoice] = useState<string>('');
+  const [voicesLoading, setVoicesLoading] = useState(false);
+  const [audioRoute, setAudioRoute] = useState<AudioRoute>('auto');
 
   const version = Constants.expoConfig?.version || '2.0.0';
   const buildNumber = Constants.expoConfig?.ios?.buildNumber || '';
@@ -90,11 +97,33 @@ export function SettingsScreen() {
     } catch {}
   }, []);
 
+  const loadVoices = React.useCallback(async () => {
+    setVoicesLoading(true);
+    try {
+      const res = await api.get<VoiceOption[]>('voices');
+      if (Array.isArray(res)) setVoices(res);
+    } catch {}
+    setVoicesLoading(false);
+  }, []);
+
+  const loadAudioRoute = React.useCallback(async () => {
+    const saved = await SecureStore.getItemAsync('angel_v2_audio_route');
+    if (saved === 'speaker' || saved === 'bluetooth') setAudioRoute(saved);
+  }, []);
+
+  const loadSelectedVoice = React.useCallback(async () => {
+    const saved = await SecureStore.getItemAsync('angel_v2_voice_id');
+    if (saved) setSelectedVoice(saved);
+  }, []);
+
   React.useEffect(() => {
     loadKeys();
     loadVoiceprintStatus();
     loadSpeechSettings();
-  }, [loadVoiceprintStatus]);
+    loadVoices();
+    loadAudioRoute();
+    loadSelectedVoice();
+  }, [loadVoiceprintStatus, loadVoices, loadAudioRoute, loadSelectedVoice]);
 
   const loadSpeechSettings = async () => {
     const locale = await SecureStore.getItemAsync('angel_v2_speech_locale');
@@ -144,6 +173,16 @@ export function SettingsScreen() {
   const saveKeywords = async () => {
     await SecureStore.setItemAsync('angel_v2_speech_keywords', keywordsText);
     Alert.alert('Saved', 'Keywords will be used in your next session.');
+  };
+
+  const saveVoice = async (voiceId: string) => {
+    setSelectedVoice(voiceId);
+    await SecureStore.setItemAsync('angel_v2_voice_id', voiceId);
+  };
+
+  const saveAudioRoute = async (route: AudioRoute) => {
+    setAudioRoute(route);
+    await SecureStore.setItemAsync('angel_v2_audio_route', route);
   };
 
   const loadKeys = async () => {
@@ -454,6 +493,78 @@ export function SettingsScreen() {
           />
         </View>
 
+        {/* Angel Voice */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Angel Voice</Text>
+          <View style={styles.card}>
+            <Text style={styles.cardLabel}>Voice</Text>
+            <Text style={styles.cardDesc}>Choose how Angel sounds when speaking whispers aloud.</Text>
+            {voicesLoading ? (
+              <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.sm }} />
+            ) : voices.length > 0 ? (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: spacing.sm }}>
+                <View style={styles.voiceRow}>
+                  {voices.map((v) => (
+                    <TouchableOpacity
+                      key={v.id}
+                      style={[
+                        styles.voiceChip,
+                        selectedVoice === v.id && styles.voiceChipActive,
+                      ]}
+                      onPress={() => saveVoice(v.id)}
+                    >
+                      <Text style={[
+                        styles.voiceName,
+                        selectedVoice === v.id && styles.voiceNameActive,
+                      ]} numberOfLines={1}>{v.name}</Text>
+                      <Text style={styles.voiceDesc} numberOfLines={1}>{v.language}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </ScrollView>
+            ) : (
+              <Text style={[styles.cardDesc, { marginTop: spacing.sm }]}>
+                No voices available. Voice output will use the default voice.
+              </Text>
+            )}
+          </View>
+        </View>
+
+        {/* Audio Device */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Audio Device</Text>
+          <View style={styles.card}>
+            <Text style={styles.cardLabel}>Microphone & Output</Text>
+            <Text style={styles.cardDesc}>Choose where Angel listens and speaks.</Text>
+            <View style={styles.presetGrid}>
+              {([
+                { key: 'auto' as const, label: 'Auto', icon: 'phone-portrait-outline' },
+                { key: 'bluetooth' as const, label: 'AirPods / BT', icon: 'bluetooth-outline' },
+                { key: 'speaker' as const, label: 'Speaker', icon: 'volume-high-outline' },
+              ]).map((opt) => (
+                <TouchableOpacity
+                  key={opt.key}
+                  style={[
+                    styles.presetChip,
+                    audioRoute === opt.key && styles.presetChipActive,
+                  ]}
+                  onPress={() => saveAudioRoute(opt.key)}
+                >
+                  <Ionicons
+                    name={opt.icon as any}
+                    size={14}
+                    color={audioRoute === opt.key ? colors.primary : colors.textSecondary}
+                  />
+                  <Text style={[
+                    styles.presetLabel,
+                    audioRoute === opt.key && styles.presetLabelActive,
+                  ]}>{opt.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+        </View>
+
         {/* Speech Recognition */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Speech Recognition</Text>
@@ -751,6 +862,37 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
     minHeight: 80,
     textAlignVertical: 'top',
+  },
+  voiceRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    paddingRight: spacing.md,
+  },
+  voiceChip: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceHover,
+    borderWidth: 1,
+    borderColor: colors.border,
+    minWidth: 100,
+  },
+  voiceChipActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryMuted,
+  },
+  voiceName: {
+    color: colors.text,
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+  },
+  voiceNameActive: {
+    color: colors.primary,
+  },
+  voiceDesc: {
+    color: colors.textTertiary,
+    fontSize: fontSize.xs,
+    marginTop: 2,
   },
   versionText: {
     color: colors.textTertiary,

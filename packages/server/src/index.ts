@@ -11,6 +11,7 @@ import { sessionsRouter } from './routes/sessions';
 import { memoryRouter } from './routes/memory';
 import { skillsRouter } from './routes/skills';
 import { voiceprintRouter } from './routes/voiceprint';
+import { voicesRouter } from './routes/voices';
 import { authenticateToken } from './middleware/auth';
 import { setupSocketHandlers } from './services/socket.service';
 
@@ -122,8 +123,9 @@ app.get('/debug/deepgram', authenticateToken, async (_, res) => {
   res.json({ results });
 });
 
-// Auth routes (no auth middleware)
+// Public routes (no auth middleware)
 app.use('/api/auth', authRouter);
+app.use('/api/voices', voicesRouter);
 
 // Protected routes
 app.use('/api/sessions', authenticateToken, sessionsRouter);

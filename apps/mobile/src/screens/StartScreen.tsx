@@ -29,7 +29,7 @@ import { SessionCard } from '../components/SessionCard';
 import { useAuth } from '../hooks/useAuth';
 import { useApi } from '../hooks/useApi';
 import { connectSocket, disconnectSocket, getSocket, onSocketStateChange } from '../services/socket';
-import { requestMicPermission, startRecording, stopRecording, setGain, getGain } from '../services/audio';
+import { requestMicPermission, startRecording, stopRecording, setGain, getGain, setAudioRoute } from '../services/audio';
 import { api } from '../services/api';
 import { getTTSPlayer, disposeTTSPlayer } from '../services/ttsPlayer';
 import { colors, spacing, fontSize, radius } from '../theme';
@@ -415,9 +415,22 @@ export function StartScreen() {
           if (ownerLang) {
             startPayload.ownerLanguage = ownerLang;
           }
+          // Load TTS voice preference
+          const savedVoice = await SecureStore.getItemAsync('angel_v2_voice_id');
+          if (savedVoice) {
+            startPayload.voiceId = savedVoice;
+          }
         } catch (instrErr) {
           console.warn('[session] Failed to load Angel instructions:', instrErr);
           // Non-fatal — session starts with default instructions
+        }
+
+        // Load audio route preference before recording starts
+        const savedRoute = await SecureStore.getItemAsync('angel_v2_audio_route');
+        if (savedRoute === 'speaker' || savedRoute === 'bluetooth') {
+          setAudioRoute(savedRoute);
+        } else {
+          setAudioRoute('auto');
         }
 
         // Cache the full payload for reconnect and register listeners BEFORE

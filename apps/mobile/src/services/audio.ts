@@ -25,6 +25,7 @@ import {
 let currentGain = 2.0;
 let isCurrentlyRecording = false;
 let audioSubscription: EventSubscription | null = null;
+let currentAudioRoute: 'auto' | 'speaker' | 'bluetooth' = 'auto';
 
 // ─── GAIN CONTROL ───
 
@@ -38,6 +39,14 @@ export function setGain(factor: number) {
 
 export function getGain(): number {
   return currentGain;
+}
+
+export function setAudioRoute(route: 'auto' | 'speaker' | 'bluetooth') {
+  currentAudioRoute = route;
+}
+
+export function getAudioRoute() {
+  return currentAudioRoute;
 }
 
 /**
@@ -131,12 +140,12 @@ export async function startRecording(
     ios: {
       audioSession: {
         category: 'PlayAndRecord',
-        categoryOptions: [
-          'DefaultToSpeaker',
-          'AllowBluetooth',
-          'AllowBluetoothA2DP',
-        ],
-        mode: 'VoiceChat', // Low-latency audio + hardware AEC for TTS
+        categoryOptions: currentAudioRoute === 'speaker'
+          ? ['DefaultToSpeaker']
+          : currentAudioRoute === 'bluetooth'
+            ? ['AllowBluetooth', 'AllowBluetoothA2DP']
+            : ['DefaultToSpeaker', 'AllowBluetooth', 'AllowBluetoothA2DP'],
+        mode: 'Default',
       },
     },
   };

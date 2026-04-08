@@ -180,6 +180,7 @@ export function setupSocketHandlers(io: Server) {
       speech?: { keywords?: string[] };
       instructions?: string;
       ownerLanguage?: string;
+      voiceId?: string;
     }) => {
       const { sessionId } = payload;
       if (!socket.userId) return;
@@ -255,7 +256,7 @@ export function setupSocketHandlers(io: Server) {
       if (CARTESIA_API_KEY) {
         tts = new CartesiaTTSService({
           apiKey: CARTESIA_API_KEY,
-          voiceId: DEFAULT_VOICE_ID,
+          voiceId: payload.voiceId || DEFAULT_VOICE_ID,
           onAudioChunk: (data) => {
             socket.emit('tts:chunk', data);
           },
