@@ -79,6 +79,7 @@ export function SettingsScreen() {
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
   const previewCtxRef = useRef<AudioContext | null>(null);
   const previewSourceRef = useRef<AudioBufferQueueSourceNode | null>(null);
+  const previewAbortRef = useRef<AbortController | null>(null);
   const [micSource, setMicSource] = useState<MicSource>('auto');
   const [outputDevice, setOutputDevice] = useState<OutputDevice>('auto');
 
@@ -169,31 +170,23 @@ export function SettingsScreen() {
   const previewVoice = async (voiceId: string) => {
     // Toggle off if already playing this voice
     if (playingVoiceId === voiceId) {
-      if (previewSourceRef.current) {
-        try { previewSourceRef.current.stop(); } catch {}
-        previewSourceRef.current = null;
-      }
-      if (previewCtxRef.current) {
-        previewCtxRef.current.close();
-        previewCtxRef.current = null;
-      }
+      if (previewAbortRef.current) { previewAbortRef.current.abort(); previewAbortRef.current = null; }
+      if (previewSourceRef.current) { try { previewSourceRef.current.stop(); } catch {} previewSourceRef.current = null; }
+      if (previewCtxRef.current) { previewCtxRef.current.close(); previewCtxRef.current = null; }
       setPlayingVoiceId(null);
       return;
     }
-    // Stop any existing preview
-    if (previewSourceRef.current) {
-      try { previewSourceRef.current.stop(); } catch {}
-      previewSourceRef.current = null;
-    }
-    if (previewCtxRef.current) {
-      previewCtxRef.current.close();
-      previewCtxRef.current = null;
-    }
+    // Stop any existing preview + abort in-flight fetch
+    if (previewAbortRef.current) { previewAbortRef.current.abort(); previewAbortRef.current = null; }
+    if (previewSourceRef.current) { try { previewSourceRef.current.stop(); } catch {} previewSourceRef.current = null; }
+    if (previewCtxRef.current) { previewCtxRef.current.close(); previewCtxRef.current = null; }
 
     setPlayingVoiceId(voiceId);
     try {
-      // Fetch WAV from server
-      const response = await fetch(`${API_URL}/api/voices/preview/${voiceId}`);
+      // Fetch WAV from server (with abort controller for concurrent call safety)
+      const abort = new AbortController();
+      previewAbortRef.current = abort;
+      const response = await fetch(`${API_URL}/api/voices/preview/${voiceId}`, { signal: abort.signal });
       if (!response.ok) {
         Alert.alert('Preview Failed', `Server returned ${response.status}`);
         setPlayingVoiceId(null);

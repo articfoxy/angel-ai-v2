@@ -350,10 +350,10 @@ export function StartScreen() {
     }
   }, [liveDirective]);
 
-  const handleTest = useCallback(() => {
+  const handleTest = () => {
     testModeRef.current = true;
     handleToggle();
-  }, []);
+  };
 
   const handleAngelActivate = useCallback(() => {
     const sock = getSocket();
@@ -514,14 +514,23 @@ export function StartScreen() {
 
         // If test mode — trigger test script and SKIP recording so TTS audio
         // can play without the recording session claiming the audio hardware.
-        // Delay 3s so server has time to fully initialize Realtime AI + TTS.
+        // Retry every 1s up to 10s waiting for server to be ready.
         const isTestMode = testModeRef.current;
         if (isTestMode) {
           testModeRef.current = false;
-          setTimeout(() => {
+          let attempts = 0;
+          const tryTest = () => {
+            attempts++;
             const s = getSocket();
-            if (s?.connected) s.emit('session:test');
-          }, 3000);
+            if (s?.connected) {
+              s.emit('session:test');
+              // Server returns ack if not ready — use a one-shot listener for retry
+              s.once('test:not-ready', () => {
+                if (attempts < 10) setTimeout(tryTest, 1000);
+              });
+            }
+          };
+          setTimeout(tryTest, 2000); // Initial 2s wait for basic setup
         } else {
           // Start audio recording and stream raw PCM chunks to the server.
           // Audio is sent as binary (ArrayBuffer) for 33% less bandwidth vs base64.

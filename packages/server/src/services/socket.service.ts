@@ -53,14 +53,10 @@ export function setupSocketHandlers(io: Server) {
     let ttsEchoTimer: ReturnType<typeof setTimeout> | null = null; // Safety timeout for echo gate
 
     function clearAllTimers() {
-      if (sessionTimer) {
-        clearTimeout(sessionTimer);
-        sessionTimer = null;
-      }
-      if (idleTimer) {
-        clearTimeout(idleTimer);
-        idleTimer = null;
-      }
+      if (sessionTimer) { clearTimeout(sessionTimer); sessionTimer = null; }
+      if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+      if (ttsEchoTimer) { clearTimeout(ttsEchoTimer); ttsEchoTimer = null; }
+      if (testTimer) { clearTimeout(testTimer); testTimer = null; }
     }
 
     function resetIdleTimer() {
@@ -148,8 +144,8 @@ export function setupSocketHandlers(io: Server) {
       clearAllTimers();
       angelProcessing = false;
       if (angelThinkingTimer) { clearTimeout(angelThinkingTimer); angelThinkingTimer = null; }
-      if (testTimer) { clearTimeout(testTimer); testTimer = null; }
       isTestMode = false;
+      liveDirectives = [];
 
       // Close services in parallel for faster cleanup
       const closePromises: Promise<void>[] = [];
@@ -531,6 +527,7 @@ export function setupSocketHandlers(io: Server) {
     socket.on('session:test', () => {
       if (!currentSessionId || !realtime) {
         console.warn('[test] session:test received but session not ready (sessionId:', currentSessionId, 'realtime:', !!realtime, ')');
+        socket.emit('test:not-ready');
         return;
       }
       isTestMode = true;

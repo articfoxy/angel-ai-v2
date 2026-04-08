@@ -493,6 +493,7 @@ export class RealtimeService {
     this.clearResponseTimeout();
 
     if (this.ws) {
+      this.ws.removeAllListeners();
       this.ws.close();
       this.ws = null;
     }
