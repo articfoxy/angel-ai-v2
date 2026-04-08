@@ -182,6 +182,7 @@ export function setupSocketHandlers(io: Server) {
       if (openaiKey) {
         const userInstructions = payload.instructions || 'Help me with jargon and provide useful insights.';
         const ownerLanguage = payload.ownerLanguage || 'English';
+        console.log(`[session] Owner language: ${ownerLanguage}, Instructions length: ${userInstructions.length}`);
         realtime = new RealtimeService({
           apiKey: openaiKey,
           instructions: buildAngelInstructions(userInstructions, ownerLanguage),
