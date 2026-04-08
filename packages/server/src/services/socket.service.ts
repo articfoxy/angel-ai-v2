@@ -389,10 +389,10 @@ export function setupSocketHandlers(io: Server) {
       try {
         await deepgram.connect();
       } catch (err: any) {
-        const message = err?.message || (typeof err === 'string' ? err : JSON.stringify(err)) || 'Failed to connect to transcription service';
-        console.error('Deepgram connection failed:', message, err);
+        const message = err?.message || 'Failed to connect to transcription service';
+        console.error('Deepgram connection failed:', message);
         socket.emit('session:error', { sessionId, message });
-        cleanupSession();
+        await cleanupSession();
         return;
       }
 

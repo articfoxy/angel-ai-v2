@@ -70,9 +70,22 @@ export class DeepgramService {
     }
     const deepgram = createClient(apiKey);
 
-    // Use the user's speech locale if set (e.g. "en-US" for better accent accuracy),
-    // otherwise fall back to multilingual mode for mixed-language conversations.
-    const language = this.config.speechLocale || 'multi';
+    // Map user locale to Deepgram-supported language code.
+    // Deepgram doesn't support all locale variants (e.g. en-SG, en-IE).
+    const LOCALE_MAP: Record<string, string> = {
+      'en-SG': 'en',    // Singapore → generic English
+      'en-IE': 'en-GB', // Ireland → closest: British English
+    };
+    const VALID_DEEPGRAM_LOCALES = new Set([
+      'multi', 'en', 'en-US', 'en-GB', 'en-AU', 'en-IN', 'en-NZ',
+      'zh', 'zh-CN', 'zh-TW', 'es', 'fr', 'de', 'ja', 'ko', 'pt', 'ru', 'hi',
+    ]);
+    const raw = this.config.speechLocale || 'multi';
+    const mapped = LOCALE_MAP[raw] || raw;
+    const language = VALID_DEEPGRAM_LOCALES.has(mapped) ? mapped : 'multi';
+    if (raw !== language) {
+      console.warn(`[Deepgram] Locale "${raw}" → "${language}"`);
+    }
 
     const dgOptions: Record<string, unknown> = {
       model: 'nova-3',
