@@ -39,8 +39,9 @@ voicesRouter.get('/', async (_req: Request, res: Response) => {
     }
 
     const data = await response.json();
+    const voiceList = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
 
-    const voices: Voice[] = (Array.isArray(data) ? data : []).map((v: any) => ({
+    const voices: Voice[] = voiceList.map((v: any) => ({
       id: v.id,
       name: v.name,
       description: v.description ?? '',
