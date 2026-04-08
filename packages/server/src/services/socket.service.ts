@@ -144,7 +144,6 @@ export function setupSocketHandlers(io: Server) {
       clearAllTimers();
       angelProcessing = false;
       if (angelThinkingTimer) { clearTimeout(angelThinkingTimer); angelThinkingTimer = null; }
-      isTestMode = false;
       liveDirectives = [];
 
       // Close services in parallel for faster cleanup
@@ -342,8 +341,8 @@ export function setupSocketHandlers(io: Server) {
                 if (angelThinkingTimer) { clearTimeout(angelThinkingTimer); }
                 // Small delay to let the owner finish their sentence, then force respond
                 const wakeDelayTimer = setTimeout(async () => {
-                  // Guard: if angel was deactivated while waiting, don't proceed
-                  if (!angelProcessing) return;
+                  // Guard: if session ended or angel was deactivated while waiting
+                  if (!angelProcessing || !currentSessionId) return;
                   try {
                     if (realtime) {
                       realtime.forceRespond();
@@ -352,6 +351,8 @@ export function setupSocketHandlers(io: Server) {
                     console.error('[agent] Wake word response error:', err);
                   }
                   // forceRespond is async via WebSocket — set max thinking indicator
+                  // Guard again to prevent setting timer after cleanup
+                  if (!currentSessionId) return;
                   angelThinkingTimer = setTimeout(() => {
                     if (angelProcessing) {
                       angelProcessing = false;
@@ -524,14 +525,12 @@ export function setupSocketHandlers(io: Server) {
 
     // ── Test conversation mode ──
     let testTimer: ReturnType<typeof setTimeout> | null = null;
-    let isTestMode = false;
     socket.on('session:test', () => {
       if (!currentSessionId || !realtime) {
         console.warn('[test] session:test received but session not ready (sessionId:', currentSessionId, 'realtime:', !!realtime, ')');
         socket.emit('test:not-ready');
         return;
       }
-      isTestMode = true;
       console.log('[test] Starting test conversation');
 
       const SPEAKERS = [

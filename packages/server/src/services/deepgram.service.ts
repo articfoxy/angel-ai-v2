@@ -66,7 +66,7 @@ export class DeepgramService {
     if (!apiKey) {
       console.error('[Deepgram] DEEPGRAM_API_KEY is not set! Transcription will fail.');
     } else {
-      console.log(`[Deepgram] Connecting with API key: ${apiKey.substring(0, 8)}...`);
+      console.log(`[Deepgram] Connecting with API key: ${apiKey.substring(0, 5)}...`);
     }
     const deepgram = createClient(apiKey);
 

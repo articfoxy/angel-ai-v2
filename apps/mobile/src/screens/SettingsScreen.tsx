@@ -217,7 +217,12 @@ export function SettingsScreen() {
       }
 
       // Clamp dataSize to actual buffer bounds to prevent RangeError on truncated WAV
-      const actualDataSize = Math.min(dataSize, arrayBuffer.byteLength - dataOffset);
+      const actualDataSize = Math.max(0, Math.min(dataSize, arrayBuffer.byteLength - dataOffset));
+      if (actualDataSize < 2) {
+        Alert.alert('Preview Failed', 'Audio data too short or corrupted');
+        setPlayingVoiceId(null);
+        return;
+      }
 
       // Convert 16-bit signed LE PCM → Float32 [-1, 1]
       const pcmBytes = new Uint8Array(arrayBuffer, dataOffset, actualDataSize);
@@ -246,6 +251,8 @@ export function SettingsScreen() {
       source.start();
       previewSourceRef.current = source;
     } catch (err: any) {
+      // Silently handle user-initiated abort (tap to stop while loading)
+      if (err?.name === 'AbortError') { setPlayingVoiceId(null); return; }
       console.warn('[settings] Voice preview failed:', err);
       Alert.alert('Preview Error', err?.message || 'Could not play voice preview');
       setPlayingVoiceId(null);

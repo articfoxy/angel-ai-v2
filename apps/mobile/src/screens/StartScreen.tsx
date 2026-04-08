@@ -50,6 +50,7 @@ const SESSION_EVENTS = [
   'tts:chunk',
   'tts:done',
   'tts:cancel',
+  'realtime:status',
 ] as const;
 
 const ANGEL_INSTRUCTION_PRESETS = [
@@ -69,6 +70,7 @@ export function StartScreen() {
   const { user } = useAuth();
   const [isActive, setIsActive] = useState(false);
   const [isReconnecting, setIsReconnecting] = useState(false);
+  const [aiStatus, setAiStatus] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
   const [whisperCards, setWhisperCards] = useState<WhisperCardData[]>([]);
@@ -207,6 +209,7 @@ export function StartScreen() {
       if (timerRef.current) clearInterval(timerRef.current);
       setIsActive(false);
       setAngelThinking(false);
+      setAiStatus(null);
       setSessionId(null);
       setSegments([]);
       setWhisperCards([]);
@@ -239,6 +242,7 @@ export function StartScreen() {
       if (timerRef.current) clearInterval(timerRef.current);
       setIsActive(false);
       setAngelThinking(false);
+      setAiStatus(null);
       setSessionId(null);
       setSegments([]);
       setWhisperCards([]);
@@ -271,6 +275,10 @@ export function StartScreen() {
     sock.on('tts:cancel', () => {
       const player = getTTSPlayer();
       player.stop();
+    });
+
+    sock.on('realtime:status', (data: { status: string }) => {
+      setAiStatus(data.status);
     });
   }, [cleanupSessionListeners, navigation, refetchSessions]);
 
@@ -359,6 +367,12 @@ export function StartScreen() {
     const sock = getSocket();
     if (!sock?.connected || !isActive) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    // Interrupt any playing TTS so new response can come through
+    const player = getTTSPlayer();
+    if (player.playing) {
+      sock.emit('tts:skip');
+      player.stop();
+    }
     sock.emit('angel:activate');
   }, [isActive]);
 
@@ -385,6 +399,7 @@ export function StartScreen() {
             setIsActive(false);
             setIsReconnecting(false);
             setAngelThinking(false);
+            setAiStatus(null);
             setSessionId(null);
             setSegments([]);
             setWhisperCards([]);
@@ -525,8 +540,9 @@ export function StartScreen() {
             attempts++;
             const s = getSocket();
             if (s?.connected) {
+              // Remove stale listener before adding a new one
+              s.off('test:not-ready');
               s.emit('session:test');
-              // Server returns ack if not ready — use a one-shot listener for retry
               s.once('test:not-ready', () => {
                 if (attempts < 10) setTimeout(tryTest, 1000);
               });
@@ -592,6 +608,14 @@ export function StartScreen() {
         <View style={styles.reconnectBanner}>
           <ActivityIndicator size="small" color={colors.warning} />
           <Text style={styles.reconnectText}>Reconnecting...</Text>
+        </View>
+      )}
+
+      {/* AI engine status banner */}
+      {aiStatus === 'error' && isActive && (
+        <View style={styles.reconnectBanner}>
+          <Ionicons name="warning-outline" size={16} color={colors.warning} />
+          <Text style={styles.reconnectText}>AI engine disconnected — whispers paused</Text>
         </View>
       )}
 

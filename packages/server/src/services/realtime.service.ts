@@ -68,7 +68,7 @@ export class RealtimeService {
       }
 
       console.log('[Realtime] Connecting to:', REALTIME_URL);
-      console.log('[Realtime] API key prefix:', this.config.apiKey.substring(0, 12) + '...');
+      console.log('[Realtime] API key present:', this.config.apiKey ? `${this.config.apiKey.substring(0, 5)}...` : 'MISSING');
 
       this.ws = new WebSocket(REALTIME_URL, {
         headers: {
