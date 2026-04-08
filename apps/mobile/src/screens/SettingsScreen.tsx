@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -13,10 +13,12 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { Audio } from 'expo-av';
 import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import { useAuth } from '../hooks/useAuth';
 import { api } from '../services/api';
+import { API_URL } from '../config';
 import { VoiceEnrollment } from '../components/VoiceEnrollment';
 import { colors, spacing, fontSize } from '../theme';
 
@@ -28,16 +30,6 @@ const API_KEY_STORAGE = {
 
 type ModelProvider = 'openai' | 'anthropic' | 'google';
 
-const ANGEL_INSTRUCTION_PRESETS = [
-  { id: 'jargon', label: 'Explain jargon & acronyms', icon: '📖' },
-  { id: 'translate_zh', label: 'Translate Chinese to English', icon: '🇨🇳' },
-  { id: 'translate_es', label: 'Translate Spanish to English', icon: '🇪🇸' },
-  { id: 'meeting', label: 'Track action items & decisions', icon: '📋' },
-  { id: 'coach', label: 'Coach my communication style', icon: '🎯' },
-  { id: 'fact_check', label: 'Flag inaccuracies & contradictions', icon: '⚠️' },
-  { id: 'sales', label: 'Help me close the deal', icon: '💰' },
-  { id: 'learn', label: 'Help me learn & remember key points', icon: '🧠' },
-];
 
 const ENGLISH_LOCALES = [
   { code: 'en', label: 'General', flag: '🌐' },
@@ -80,12 +72,12 @@ export function SettingsScreen() {
   const [voiceprintEnrolled, setVoiceprintEnrolled] = useState(false);
   const [speechLocale, setSpeechLocale] = useState('en');
   const [keywordsText, setKeywordsText] = useState('');
-  const [angelInstructions, setAngelInstructions] = useState('');
-  const [activePresets, setActivePresets] = useState<string[]>([]);
   const [ownerLanguage, setOwnerLanguage] = useState('English');
   const [voices, setVoices] = useState<VoiceOption[]>([]);
   const [selectedVoice, setSelectedVoice] = useState<string>('');
   const [voicesLoading, setVoicesLoading] = useState(false);
+  const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
+  const soundRef = useRef<Audio.Sound | null>(null);
   const [micSource, setMicSource] = useState<MicSource>('auto');
   const [outputDevice, setOutputDevice] = useState<OutputDevice>('auto');
 
@@ -129,6 +121,12 @@ export function SettingsScreen() {
     loadSelectedVoice();
   }, [loadVoiceprintStatus, loadVoices, loadAudioDevices, loadSelectedVoice]);
 
+  React.useEffect(() => {
+    return () => {
+      if (soundRef.current) soundRef.current.unloadAsync();
+    };
+  }, []);
+
   const loadSpeechSettings = async () => {
     const locale = await SecureStore.getItemAsync('angel_v2_speech_locale');
     if (locale) setSpeechLocale(locale);
@@ -137,32 +135,8 @@ export function SettingsScreen() {
     // Load Owner Language
     const savedOwnerLang = await SecureStore.getItemAsync('angel_v2_owner_language');
     if (savedOwnerLang) setOwnerLanguage(savedOwnerLang);
-    // Load Angel Instructions
-    const savedPresets = await SecureStore.getItemAsync('angel_v2_instruction_presets');
-    if (savedPresets) {
-      try {
-        const parsed = JSON.parse(savedPresets);
-        if (Array.isArray(parsed)) {
-          setActivePresets(parsed);
-        }
-      } catch {}
-    }
-    const savedCustom = await SecureStore.getItemAsync('angel_v2_custom_instructions');
-    if (savedCustom) setAngelInstructions(savedCustom);
   };
 
-  const togglePreset = async (presetId: string) => {
-    const updated = activePresets.includes(presetId)
-      ? activePresets.filter(p => p !== presetId)
-      : [...activePresets, presetId];
-    setActivePresets(updated);
-    await SecureStore.setItemAsync('angel_v2_instruction_presets', JSON.stringify(updated));
-  };
-
-  const saveCustomInstructions = async () => {
-    await SecureStore.setItemAsync('angel_v2_custom_instructions', angelInstructions);
-    Alert.alert('Saved', 'Angel will use these instructions in your next session.');
-  };
 
   const saveOwnerLanguage = async (lang: string) => {
     setOwnerLanguage(lang);
@@ -182,6 +156,40 @@ export function SettingsScreen() {
   const saveVoice = async (voiceId: string) => {
     setSelectedVoice(voiceId);
     await SecureStore.setItemAsync('angel_v2_voice_id', voiceId);
+  };
+
+  const previewVoice = async (voiceId: string) => {
+    if (playingVoiceId === voiceId) {
+      if (soundRef.current) {
+        await soundRef.current.unloadAsync();
+        soundRef.current = null;
+      }
+      setPlayingVoiceId(null);
+      return;
+    }
+    if (soundRef.current) {
+      await soundRef.current.unloadAsync();
+      soundRef.current = null;
+    }
+    setPlayingVoiceId(voiceId);
+    try {
+      await Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: `${API_URL}/api/voices/preview/${voiceId}` },
+        { shouldPlay: true }
+      );
+      soundRef.current = sound;
+      sound.setOnPlaybackStatusUpdate((status) => {
+        if (status.isLoaded && status.didJustFinish) {
+          setPlayingVoiceId(null);
+          sound.unloadAsync();
+          soundRef.current = null;
+        }
+      });
+    } catch (err) {
+      console.warn('[settings] Voice preview failed:', err);
+      setPlayingVoiceId(null);
+    }
   };
 
   const saveMicSource = async (source: MicSource) => {
@@ -421,9 +429,9 @@ export function SettingsScreen() {
           )}
         </View>
 
-        {/* Angel Instructions */}
+        {/* Language */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Angel Instructions</Text>
+          <Text style={styles.sectionTitle}>Language</Text>
           <View style={styles.card}>
             <Text style={styles.cardLabel}>Owner Language</Text>
             <Text style={styles.cardDesc}>Angel will always respond to you in this language.</Text>
@@ -447,49 +455,6 @@ export function SettingsScreen() {
                 </TouchableOpacity>
               ))}
             </View>
-          </View>
-          <View style={styles.card}>
-            <Text style={styles.cardLabel}>What should Angel help with?</Text>
-            <Text style={styles.cardDesc}>Angel is always active — these instructions control when it speaks up.</Text>
-            <View style={styles.presetGrid}>
-              {ANGEL_INSTRUCTION_PRESETS.map((preset) => (
-                <TouchableOpacity
-                  key={preset.id}
-                  style={[
-                    styles.presetChip,
-                    activePresets.includes(preset.id) && styles.presetChipActive,
-                  ]}
-                  onPress={() => togglePreset(preset.id)}
-                >
-                  <Text style={styles.presetIcon}>{preset.icon}</Text>
-                  <Text style={[
-                    styles.presetLabel,
-                    activePresets.includes(preset.id) && styles.presetLabelActive,
-                  ]} numberOfLines={1}>
-                    {preset.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-
-          <View style={styles.card}>
-            <Text style={styles.cardLabel}>Custom Instructions</Text>
-            <Text style={styles.cardDesc}>Add anything else you want Angel to do during conversations.</Text>
-            <TextInput
-              style={styles.keywordsInput}
-              value={angelInstructions}
-              onChangeText={setAngelInstructions}
-              placeholder={"e.g. Remind me to follow up on pricing\nAlert me if anyone mentions deadlines"}
-              placeholderTextColor={colors.textTertiary}
-              multiline
-              numberOfLines={4}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            <TouchableOpacity style={styles.saveKeyButton} onPress={saveCustomInstructions}>
-              <Text style={styles.saveKeyText}>Save Instructions</Text>
-            </TouchableOpacity>
           </View>
         </View>
 
@@ -522,10 +487,22 @@ export function SettingsScreen() {
                       ]}
                       onPress={() => saveVoice(v.id)}
                     >
-                      <Text style={[
-                        styles.voiceName,
-                        selectedVoice === v.id && styles.voiceNameActive,
-                      ]} numberOfLines={1}>{v.name}</Text>
+                      <View style={styles.voiceChipHeader}>
+                        <Text style={[
+                          styles.voiceName,
+                          selectedVoice === v.id && styles.voiceNameActive,
+                        ]} numberOfLines={1}>{v.name}</Text>
+                        <TouchableOpacity
+                          onPress={() => previewVoice(v.id)}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        >
+                          {playingVoiceId === v.id ? (
+                            <ActivityIndicator size="small" color={colors.primary} />
+                          ) : (
+                            <Ionicons name="play-circle-outline" size={20} color={colors.primary} />
+                          )}
+                        </TouchableOpacity>
+                      </View>
                       <Text style={styles.voiceDesc} numberOfLines={1}>{v.language}</Text>
                     </TouchableOpacity>
                   ))}
@@ -916,11 +893,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceHover,
     borderWidth: 1,
     borderColor: colors.border,
-    minWidth: 100,
+    minWidth: 120,
   },
   voiceChipActive: {
     borderColor: colors.primary,
     backgroundColor: colors.primaryMuted,
+  },
+  voiceChipHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
   },
   voiceName: {
     color: colors.text,

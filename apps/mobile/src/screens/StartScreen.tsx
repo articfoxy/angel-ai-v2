@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Alert,
   TouchableOpacity,
+  TextInput,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import * as Haptics from 'expo-haptics';
@@ -51,6 +52,17 @@ const SESSION_EVENTS = [
   'tts:cancel',
 ] as const;
 
+const ANGEL_INSTRUCTION_PRESETS = [
+  { id: 'jargon', label: 'Explain jargon & acronyms', icon: '📖' },
+  { id: 'translate_zh', label: 'Translate Chinese → English', icon: '🇨🇳' },
+  { id: 'translate_es', label: 'Translate Spanish → English', icon: '🇪🇸' },
+  { id: 'meeting', label: 'Track action items & decisions', icon: '📋' },
+  { id: 'coach', label: 'Coach my communication', icon: '🎯' },
+  { id: 'fact_check', label: 'Flag inaccuracies', icon: '⚠️' },
+  { id: 'sales', label: 'Help me close the deal', icon: '💰' },
+  { id: 'learn', label: 'Help me learn & remember', icon: '🧠' },
+];
+
 export function StartScreen() {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
@@ -65,6 +77,8 @@ export function StartScreen() {
   const [gain, setGainState] = useState(getGain());
   const [showGain, setShowGain] = useState(false);
   const [angelThinking, setAngelThinking] = useState(false);
+  const [activePresets, setActivePresets] = useState<string[]>([]);
+  const [customInstructions, setCustomInstructions] = useState('');
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isStartingRef = useRef(false); // Double-tap guard for session creation
 
@@ -292,6 +306,36 @@ export function StartScreen() {
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [cleanupSessionListeners]);
+
+  // Load instruction presets + custom instructions from SecureStore
+  useEffect(() => {
+    (async () => {
+      try {
+        const savedPresets = await SecureStore.getItemAsync('angel_v2_instruction_presets');
+        if (savedPresets) {
+          const parsed = JSON.parse(savedPresets);
+          if (Array.isArray(parsed)) setActivePresets(parsed);
+        }
+        const savedCustom = await SecureStore.getItemAsync('angel_v2_custom_instructions');
+        if (savedCustom) setCustomInstructions(savedCustom);
+      } catch {}
+    })();
+  }, []);
+
+  const togglePreset = useCallback(async (presetId: string) => {
+    setActivePresets((prev) => {
+      const updated = prev.includes(presetId)
+        ? prev.filter((p) => p !== presetId)
+        : [...prev, presetId];
+      SecureStore.setItemAsync('angel_v2_instruction_presets', JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
+
+  const saveCustomInstructions = useCallback(async (text: string) => {
+    setCustomInstructions(text);
+    await SecureStore.setItemAsync('angel_v2_custom_instructions', text);
+  }, []);
 
   const handleAngelActivate = useCallback(() => {
     const sock = getSocket();
@@ -595,6 +639,43 @@ export function StartScreen() {
             <AngelButton onPress={handleToggle} isActive={false} />
           </View>
 
+          {/* Angel Instructions */}
+          <View style={styles.instructionSection}>
+            <Text style={styles.sectionTitle}>What should Angel help with?</Text>
+            <View style={styles.presetGrid}>
+              {ANGEL_INSTRUCTION_PRESETS.map((preset) => (
+                <TouchableOpacity
+                  key={preset.id}
+                  style={[
+                    styles.presetChip,
+                    activePresets.includes(preset.id) && styles.presetChipActive,
+                  ]}
+                  onPress={() => togglePreset(preset.id)}
+                >
+                  <Text style={styles.presetIcon}>{preset.icon}</Text>
+                  <Text
+                    style={[
+                      styles.presetLabel,
+                      activePresets.includes(preset.id) && styles.presetLabelActive,
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {preset.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TextInput
+              style={styles.customInput}
+              value={customInstructions}
+              onChangeText={saveCustomInstructions}
+              placeholder="Custom instructions for Angel..."
+              placeholderTextColor={colors.textTertiary}
+              multiline
+              numberOfLines={3}
+            />
+          </View>
+
           {/* Conversation History */}
           <View style={styles.historySection}>
             <Text style={styles.sectionTitle}>Conversation History</Text>
@@ -753,6 +834,51 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: spacing.xxl * 1.5,
+  },
+  instructionSection: {
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.lg,
+  },
+  presetGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  presetChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: spacing.xs + 4,
+    borderRadius: 20,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  presetChipActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryMuted,
+  },
+  presetIcon: { fontSize: 14 },
+  presetLabel: {
+    color: colors.textSecondary,
+    fontSize: fontSize.xs,
+    fontWeight: '600',
+    flexShrink: 1,
+  },
+  presetLabelActive: { color: colors.primary },
+  customInput: {
+    backgroundColor: colors.surface,
+    borderRadius: 12,
+    padding: spacing.sm,
+    color: colors.text,
+    fontSize: fontSize.sm,
+    marginTop: spacing.md,
+    minHeight: 60,
+    textAlignVertical: 'top',
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   historySection: { marginTop: spacing.sm },
   sectionTitle: {
