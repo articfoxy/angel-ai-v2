@@ -46,7 +46,8 @@
         {
           "microphonePermission": "Angel AI needs microphone access to provide real-time conversation intelligence."
         }
-      ]
+      ],
+      "react-native-audio-api"
     ],
     "extra": {
       "eas": {

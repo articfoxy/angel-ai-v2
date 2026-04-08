@@ -31,6 +31,7 @@ import { useApi } from '../hooks/useApi';
 import { connectSocket, disconnectSocket, getSocket, onSocketStateChange } from '../services/socket';
 import { requestMicPermission, startRecording, stopRecording, setGain, getGain } from '../services/audio';
 import { api } from '../services/api';
+import { getTTSPlayer, disposeTTSPlayer } from '../services/ttsPlayer';
 import { colors, spacing, fontSize, radius } from '../theme';
 import type { Session, SessionsListResponse, TranscriptSegment, WhisperCardData } from '../types';
 
@@ -44,6 +45,10 @@ const SESSION_EVENTS = [
   'session:error',
   'deepgram:status',
   'angel:thinking',
+  'tts:start',
+  'tts:chunk',
+  'tts:done',
+  'tts:cancel',
 ] as const;
 
 export function StartScreen() {
@@ -193,6 +198,7 @@ export function StartScreen() {
       setSpeakerNames({});
       setElapsed(0);
       startPayloadRef.current = null;
+      disposeTTSPlayer();
       cleanupSessionListeners();
       disconnectSocket();
       refetchSessions();
@@ -211,6 +217,7 @@ export function StartScreen() {
       setSpeakerNames({});
       setElapsed(0);
       startPayloadRef.current = null;
+      disposeTTSPlayer();
       cleanupSessionListeners();
       disconnectSocket();
       refetchSessions();
@@ -242,10 +249,32 @@ export function StartScreen() {
       setSpeakerNames({});
       setElapsed(0);
       startPayloadRef.current = null;
+      disposeTTSPlayer();
       cleanupSessionListeners();
       disconnectSocket();
       refetchSessions();
       Alert.alert('Session Error', data.message || 'An error occurred during your session');
+    });
+
+    // ── TTS audio playback handlers ──
+    sock.on('tts:start', (data: { whisperId: string }) => {
+      const player = getTTSPlayer();
+      player.startWhisper(data.whisperId);
+    });
+
+    sock.on('tts:chunk', (data: { whisperId: string; audio: string; chunkIndex: number }) => {
+      const player = getTTSPlayer();
+      player.feedChunk(data.whisperId, data.audio);
+    });
+
+    sock.on('tts:done', (data: { whisperId: string }) => {
+      const player = getTTSPlayer();
+      player.finishWhisper(data.whisperId);
+    });
+
+    sock.on('tts:cancel', () => {
+      const player = getTTSPlayer();
+      player.stop();
     });
   }, [cleanupSessionListeners, navigation, refetchSessions]);
 
@@ -277,6 +306,7 @@ export function StartScreen() {
   useEffect(() => {
     return () => {
       stopRecording().catch(() => {});
+      disposeTTSPlayer();
       cleanupSessionListeners();
       disconnectSocket();
       if (timerRef.current) clearInterval(timerRef.current);
@@ -322,6 +352,7 @@ export function StartScreen() {
               debriefTimeoutRef.current = setTimeout(() => {
                 console.log('[session] Debrief timeout — cleaning up');
                 debriefTimeoutRef.current = null;
+                disposeTTSPlayer();
                 cleanupSessionListeners();
                 disconnectSocket();
                 setSessionId(null);
@@ -333,6 +364,7 @@ export function StartScreen() {
               }, 30_000);
             } else {
               // No socket — just clean up directly
+              disposeTTSPlayer();
               cleanupSessionListeners();
               disconnectSocket();
               setSessionId(null);
@@ -433,6 +465,20 @@ export function StartScreen() {
         // emitting so we don't miss any fast server responses.
         startPayloadRef.current = startPayload;
         registerSessionListeners(socket);
+
+        // Initialize TTS player for voice whisper playback via AirPods
+        const ttsPlayer = getTTSPlayer({
+          onPlaybackStart: (whisperId) => {
+            const currentSocket = getSocket();
+            currentSocket?.emit('tts:ack', { whisperId });
+          },
+          onPlaybackDone: (whisperId) => {
+            const currentSocket = getSocket();
+            currentSocket?.emit('tts:finished', { whisperId });
+          },
+        });
+        await ttsPlayer.init();
+
         socket.emit('session:start', startPayload);
 
         // Start audio recording and stream raw PCM chunks to the server.
@@ -453,6 +499,7 @@ export function StartScreen() {
       } catch (err: any) {
         console.error('Failed to start session:', err);
         await stopRecording();
+        disposeTTSPlayer();
         cleanupSessionListeners();
         disconnectSocket();
         if (timerRef.current) clearInterval(timerRef.current);

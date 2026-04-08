@@ -7,11 +7,14 @@ import { SearchService } from './search.service';
 import { RealtimeService, buildAngelInstructions } from './realtime.service';
 import { ExtractionService } from './memory/extraction.service';
 import { runPostSessionReflection } from './memory/reflection.service';
+import { CartesiaTTSService } from './tts.service';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
 const MAX_SESSION_DURATION_MS = 7_200_000; // 2 hours
 const IDLE_TIMEOUT_MS = 300_000; // 5 minutes with no new transcript
 const ALLOWED_OWNER_LANGUAGES = ['English', 'Chinese', 'Malay', 'Spanish', 'French', 'Japanese', 'Korean', 'Hindi'];
+const CARTESIA_API_KEY = process.env.CARTESIA_API_KEY || '';
+const DEFAULT_VOICE_ID = process.env.CARTESIA_VOICE_ID || 'a0e99841-438c-4a64-b679-ae501e7d6091';
 
 interface AuthenticatedSocket extends Socket {
   userId?: string;
@@ -45,6 +48,8 @@ export function setupSocketHandlers(io: Server) {
     let sessionTimer: ReturnType<typeof setTimeout> | null = null;
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
     let currentSessionId: string | null = null;
+    let tts: CartesiaTTSService | null = null;
+    let ttsPlaying = false; // Echo gate: true while TTS audio plays on client
 
     function clearAllTimers() {
       if (sessionTimer) {
@@ -125,6 +130,11 @@ export function setupSocketHandlers(io: Server) {
       };
       socket.emit('whisper', card);
 
+      // Speak the whisper via TTS (voice output through AirPods)
+      if (tts && tts.isConnected && whisper.content && whisper.content.length >= 3) {
+        tts.speak(card.id, whisper.content);
+      }
+
       // Clear thinking indicator as soon as whisper arrives (don't wait for timeout)
       if (angelProcessing) {
         angelProcessing = false;
@@ -149,6 +159,12 @@ export function setupSocketHandlers(io: Server) {
         const dg = deepgram;
         deepgram = null;
         closePromises.push(dg.close().catch((err: any) => console.error('[cleanup] Deepgram close error:', err)));
+      }
+      if (tts) {
+        const t = tts;
+        tts = null;
+        ttsPlaying = false;
+        closePromises.push(t.close().catch((err: any) => console.error('[cleanup] TTS close error:', err)));
       }
       if (closePromises.length > 0) {
         await Promise.allSettled(closePromises);
@@ -175,7 +191,7 @@ export function setupSocketHandlers(io: Server) {
 
       // Guard: if connections already exist (e.g., rapid reconnect),
       // clean them up before creating new ones to prevent orphaned connections.
-      if (deepgram || realtime) {
+      if (deepgram || realtime || tts) {
         console.log(`[session] Cleaning up existing connections before re-start for session ${sessionId}`);
         await cleanupSession();
       }
@@ -235,6 +251,37 @@ export function setupSocketHandlers(io: Server) {
         console.warn('[session] No OpenAI API key — Realtime AI whispers disabled');
       }
 
+      // Initialize Cartesia TTS for voice output (whispers spoken aloud via AirPods)
+      if (CARTESIA_API_KEY) {
+        tts = new CartesiaTTSService({
+          apiKey: CARTESIA_API_KEY,
+          voiceId: DEFAULT_VOICE_ID,
+          onAudioChunk: (data) => {
+            socket.emit('tts:chunk', data);
+          },
+          onStart: (data) => {
+            ttsPlaying = true;
+            socket.emit('tts:start', data);
+          },
+          onDone: (data) => {
+            socket.emit('tts:done', data);
+            // ttsPlaying stays true until client confirms playback end via tts:finished
+          },
+          onError: (error) => {
+            console.error('[TTS] Error:', error);
+            ttsPlaying = false;
+          },
+        });
+
+        try {
+          await tts.connect();
+          console.log(`[session] TTS connected for session ${sessionId}`);
+        } catch (err) {
+          console.error('[session] TTS connection failed:', err);
+          tts = null;
+        }
+      }
+
       // Load voiceprint for owner identification (if enrolled)
       // Wrapped in try-catch — table may not exist yet if migration hasn't run
       let voiceprintRecord: any = null;
@@ -263,7 +310,8 @@ export function setupSocketHandlers(io: Server) {
             }
 
             // Feed transcript to Realtime API (always-active Angel)
-            if (realtime) {
+            // Echo gate: skip during TTS playback to prevent AI responding to its own voice
+            if (realtime && !ttsPlaying) {
               realtime.feedTranscript(`[${label}]: ${data.text}`);
             }
 
@@ -429,6 +477,17 @@ export function setupSocketHandlers(io: Server) {
         angelProcessing = false;
         socket.emit('angel:thinking', { active: false });
       }
+    });
+
+    // TTS client control events
+    socket.on('tts:skip', () => {
+      if (tts) tts.cancel();
+      ttsPlaying = false;
+      socket.emit('tts:cancel', {});
+    });
+
+    socket.on('tts:finished', () => {
+      ttsPlaying = false;
     });
 
     socket.on('session:stop', async ({ sessionId }: { sessionId: string }) => {
