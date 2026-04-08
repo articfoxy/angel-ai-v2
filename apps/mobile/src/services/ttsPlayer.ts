@@ -6,6 +6,7 @@
  * AudioBufferQueueSourceNode for gapless streaming playback.
  */
 import { AudioContext, AudioBufferQueueSourceNode } from 'react-native-audio-api';
+import { decode as b64Decode } from 'base-64';
 
 const SAMPLE_RATE = 24000; // Cartesia outputs 24kHz
 const NUM_CHANNELS = 1;    // Mono
@@ -129,7 +130,7 @@ class TTSPlayer {
   private decodeBase64PCM(base64: string): Float32Array | null {
     try {
       // Decode base64 to binary string
-      const binaryString = atob(base64);
+      const binaryString = b64Decode(base64);
       const bytes = new Uint8Array(binaryString.length);
       for (let i = 0; i < binaryString.length; i++) {
         bytes[i] = binaryString.charCodeAt(i);
@@ -175,11 +176,17 @@ class TTSPlayer {
     }
 
     const id = this.currentWhisperId;
+    const wasPlaying = this.isPlaying;
     this.isPlaying = false;
     this.currentWhisperId = null;
     this.chunkBuffer = [];
     this.chunksReceived = 0;
     this.playbackStarted = false;
+
+    // Notify server that playback ended (so echo gate can be released)
+    if (id && wasPlaying && this.config.onPlaybackDone) {
+      this.config.onPlaybackDone(id);
+    }
 
     if (id) {
       console.log('[TTS] Stopped:', id);

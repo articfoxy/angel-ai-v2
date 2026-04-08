@@ -50,6 +50,7 @@ export function setupSocketHandlers(io: Server) {
     let currentSessionId: string | null = null;
     let tts: CartesiaTTSService | null = null;
     let ttsPlaying = false; // Echo gate: true while TTS audio plays on client
+    let ttsEchoTimer: ReturnType<typeof setTimeout> | null = null; // Safety timeout for echo gate
 
     function clearAllTimers() {
       if (sessionTimer) {
@@ -164,6 +165,7 @@ export function setupSocketHandlers(io: Server) {
         const t = tts;
         tts = null;
         ttsPlaying = false;
+        if (ttsEchoTimer) { clearTimeout(ttsEchoTimer); ttsEchoTimer = null; }
         closePromises.push(t.close().catch((err: any) => console.error('[cleanup] TTS close error:', err)));
       }
       if (closePromises.length > 0) {
@@ -262,6 +264,15 @@ export function setupSocketHandlers(io: Server) {
           },
           onStart: (data) => {
             ttsPlaying = true;
+            // Safety timeout: release echo gate after 30s even if client never confirms
+            if (ttsEchoTimer) clearTimeout(ttsEchoTimer);
+            ttsEchoTimer = setTimeout(() => {
+              if (ttsPlaying) {
+                console.warn('[TTS] Echo gate safety timeout — releasing after 30s');
+                ttsPlaying = false;
+              }
+              ttsEchoTimer = null;
+            }, 30_000);
             socket.emit('tts:start', data);
           },
           onDone: (data) => {
@@ -271,6 +282,7 @@ export function setupSocketHandlers(io: Server) {
           onError: (error) => {
             console.error('[TTS] Error:', error);
             ttsPlaying = false;
+            if (ttsEchoTimer) { clearTimeout(ttsEchoTimer); ttsEchoTimer = null; }
           },
         });
 
@@ -484,11 +496,13 @@ export function setupSocketHandlers(io: Server) {
     socket.on('tts:skip', () => {
       if (tts) tts.cancel();
       ttsPlaying = false;
+      if (ttsEchoTimer) { clearTimeout(ttsEchoTimer); ttsEchoTimer = null; }
       socket.emit('tts:cancel', {});
     });
 
     socket.on('tts:finished', () => {
       ttsPlaying = false;
+      if (ttsEchoTimer) { clearTimeout(ttsEchoTimer); ttsEchoTimer = null; }
     });
 
     socket.on('session:stop', async ({ sessionId }: { sessionId: string }) => {

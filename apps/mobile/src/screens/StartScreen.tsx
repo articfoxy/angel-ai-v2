@@ -415,14 +415,15 @@ export function StartScreen() {
           if (ownerLang) {
             startPayload.ownerLanguage = ownerLang;
           }
-          // Load TTS voice preference
-          const savedVoice = await SecureStore.getItemAsync('angel_v2_voice_id');
-          if (savedVoice) {
-            startPayload.voiceId = savedVoice;
-          }
         } catch (instrErr) {
           console.warn('[session] Failed to load Angel instructions:', instrErr);
           // Non-fatal — session starts with default instructions
+        }
+
+        // Load TTS voice preference (outside instruction try/catch so it always loads)
+        const savedVoice = await SecureStore.getItemAsync('angel_v2_voice_id');
+        if (savedVoice) {
+          startPayload.voiceId = savedVoice;
         }
 
         // Load audio route preference before recording starts
@@ -440,10 +441,6 @@ export function StartScreen() {
 
         // Initialize TTS player for voice whisper playback via AirPods
         const ttsPlayer = getTTSPlayer({
-          onPlaybackStart: (whisperId) => {
-            const currentSocket = getSocket();
-            currentSocket?.emit('tts:ack', { whisperId });
-          },
           onPlaybackDone: (whisperId) => {
             const currentSocket = getSocket();
             currentSocket?.emit('tts:finished', { whisperId });

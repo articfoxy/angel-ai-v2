@@ -38,7 +38,7 @@ voicesRouter.get('/', async (_req: Request, res: Response) => {
       return res.json(cachedVoices ?? []);
     }
 
-    const data = await response.json();
+    const data: any = await response.json();
     const voiceList = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
 
     const voices: Voice[] = voiceList.map((v: any) => ({
