@@ -14,6 +14,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
+import { cacheDirectory, downloadAsync } from 'expo-file-system/src/legacy/FileSystem';
 import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import { useAuth } from '../hooks/useAuth';
@@ -173,16 +174,28 @@ export function SettingsScreen() {
     }
     setPlayingVoiceId(voiceId);
     try {
-      // Ensure playback mode — allowsRecordingIOS:false exits PlayAndRecord
-      // category which routes to earpiece. This forces speaker output.
+      // Download WAV to local cache first — remote URL streaming is unreliable on iOS
+      const localUri = `${cacheDirectory}voice-preview-${voiceId}.wav`;
+      const { status } = await downloadAsync(
+        `${API_URL}/api/voices/preview/${voiceId}`,
+        localUri,
+      );
+      if (status !== 200) {
+        Alert.alert('Preview Failed', `Server returned ${status}`);
+        setPlayingVoiceId(null);
+        return;
+      }
+
+      // Set audio mode for speaker playback
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: false,
         playsInSilentModeIOS: true,
         staysActiveInBackground: false,
       });
+
       const { sound } = await Audio.Sound.createAsync(
-        { uri: `${API_URL}/api/voices/preview/${voiceId}` },
-        { shouldPlay: true, volume: 1.0 }
+        { uri: localUri },
+        { shouldPlay: true, volume: 1.0 },
       );
       soundRef.current = sound;
       sound.setOnPlaybackStatusUpdate((status) => {
@@ -192,8 +205,9 @@ export function SettingsScreen() {
           soundRef.current = null;
         }
       });
-    } catch (err) {
+    } catch (err: any) {
       console.warn('[settings] Voice preview failed:', err);
+      Alert.alert('Preview Error', err?.message || 'Could not play voice preview');
       setPlayingVoiceId(null);
     }
   };
