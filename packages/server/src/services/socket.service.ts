@@ -148,6 +148,7 @@ export function setupSocketHandlers(io: Server) {
       clearAllTimers();
       angelProcessing = false;
       if (angelThinkingTimer) { clearTimeout(angelThinkingTimer); angelThinkingTimer = null; }
+      if (testTimer) { clearTimeout(testTimer); testTimer = null; }
 
       // Close services in parallel for faster cleanup
       const closePromises: Promise<void>[] = [];
@@ -503,6 +504,96 @@ export function setupSocketHandlers(io: Server) {
     socket.on('tts:finished', () => {
       ttsPlaying = false;
       if (ttsEchoTimer) { clearTimeout(ttsEchoTimer); ttsEchoTimer = null; }
+    });
+
+    // ── Test conversation mode ──
+    let testTimer: ReturnType<typeof setTimeout> | null = null;
+    socket.on('session:test', () => {
+      if (!currentSessionId || !realtime) return;
+      console.log('[test] Starting test conversation');
+
+      const SPEAKERS = [
+        { id: 'speaker_0', label: 'Dr. Chen' },
+        { id: 'speaker_1', label: 'Dr. Morrison' },
+        { id: 'speaker_2', label: 'Dr. Patel' },
+      ];
+
+      // Identify speakers
+      for (const s of SPEAKERS) {
+        socket.emit('speaker:identified', { speakerId: s.id, label: s.label });
+      }
+
+      const SCRIPT: { speaker: number; text: string; delay: number }[] = [
+        { speaker: 2, delay: 1000, text: "Good morning. Let's review the latest results from the SPARC tokamak high-field test campaign. Sarah, you want to lead us off?" },
+        { speaker: 0, delay: 7000, text: "Sure. The big headline — we achieved a plasma current of 8.7 mega-amperes in the latest deuterium-tritium shot. The ion temperature peaked at 120 million Kelvin, well above the Lawson criterion threshold." },
+        { speaker: 1, delay: 8000, text: "What about the energy confinement time? Last run we were struggling with neoclassical tearing modes destabilizing the plasma edge." },
+        { speaker: 0, delay: 7000, text: "We deployed a new ECCD profile — electron cyclotron current drive — targeting the q equals 2 rational surface. That fully suppressed the NTMs. Energy confinement time improved to 1.4 seconds." },
+        { speaker: 2, delay: 7000, text: "And the Q factor? That's what the board is waiting for." },
+        { speaker: 0, delay: 6000, text: "Q equals 2.3 for this shot. That's genuine net energy gain. Fusion power output was approximately 140 megawatts thermal against 60 megawatts of auxiliary heating input." },
+        { speaker: 1, delay: 8000, text: "I need to flag a materials concern. The tungsten divertor tiles showed significant sputtering erosion — roughly 3 microns per shot. At this rate, we need a replacement cycle every 200 plasma discharges." },
+        { speaker: 2, delay: 5000, text: "Is that within the design envelope?" },
+        { speaker: 1, delay: 7000, text: "Barely. The neutron flux at the first wall reached 2.4 megawatts per square meter. The RAFM steel — reduced activation ferritic martensitic — is holding up, but we're seeing helium bubble formation at the grain boundaries after 5 dpa." },
+        { speaker: 0, delay: 7000, text: "James, what about the silicon carbide fiber composite as an alternative PFC? The thermal shock resistance should be significantly better." },
+        { speaker: 1, delay: 8000, text: "We have SiC-f samples under neutron irradiation at the IFMIF facility. Early results are mixed — better radiation hardness, but thermal conductivity degrades 40 percent after 10 displacements per atom." },
+        { speaker: 2, delay: 6000, text: "OK, let's move to tritium breeding. We need a TBR above 1.1 for fuel self-sufficiency." },
+        { speaker: 0, delay: 7000, text: "The lithium-lead eutectic blanket modules measured a TBR of 1.08 this campaign. Below target. The beryllium neutron multiplier layer needs to be thicker." },
+        { speaker: 1, delay: 7000, text: "My MCNP Monte Carlo neutronics simulations suggest increasing the beryllium pebble bed from 2 to 3 centimeters. That should push us to 1.14 TBR with acceptable tritium permeation rates through the EUROFER membrane." },
+        { speaker: 0, delay: 8000, text: "Now here's the real breakthrough. We observed a new operating regime we're calling Super H-mode. The pedestal pressure was 30 percent higher than standard H-mode, with zero ELMs — no edge localized modes at all." },
+        { speaker: 2, delay: 5000, text: "That's significant. ELM mitigation has been one of our biggest engineering headaches. What's driving it?" },
+        { speaker: 0, delay: 8000, text: "The bootstrap current fraction reached 65 percent, which reduces external current drive requirements substantially. Gyrokinetic TGLF simulations show turbulent transport is dominated by trapped electron modes rather than the usual ITG modes. Completely different optimization landscape." },
+        { speaker: 1, delay: 8000, text: "On the magnets — the REBCO high-temperature superconducting coils sustained 20 Tesla on axis with zero quench events. And since they operate at 20 Kelvin instead of 4K for legacy NbTi coils, cryoplant power drops 60 percent." },
+        { speaker: 0, delay: 7000, text: "Alpha particle confinement was excellent too. Fast-ion loss detectors showed under 5 percent alpha losses. Most 3.5 MeV fusion alphas are thermalizing in the core and driving self-heating. We did see residual toroidal Alfvén eigenmodes above the TAE gap frequency, but ICRH tail modification is keeping them stable." },
+        { speaker: 2, delay: 7000, text: "Let's talk path to commercial. Our target is a pilot plant at 500 megawatts electric by 2035. Based on today's data, where do we stand?" },
+        { speaker: 0, delay: 6000, text: "If Super H-mode reproduces and we demonstrate Q equals 10, the physics basis is complete. The main risk shifts entirely to engineering." },
+        { speaker: 1, delay: 8000, text: "Agreed. Three key engineering gaps: first, structural materials that withstand 20 dpa without property degradation. Second, a tritium fuel cycle processing 300 grams per day with less than one percent inventory losses. Third, extending from 8-second pulses to true steady-state operation — probably needs a full non-inductive current drive solution." },
+        { speaker: 2, delay: 7000, text: "What about the stellarator path? Wendelstein 7-X just published their latest results." },
+        { speaker: 0, delay: 7000, text: "Stellarators have intrinsic steady-state advantage since they don't rely on inductively-driven plasma current. But the complex 3D magnetic geometry makes divertor engineering extremely difficult. Tokamaks remain the faster path to net electricity." },
+        { speaker: 2, delay: 7000, text: "Excellent work. Next DT campaign in three weeks. James, I need your updated neutronics by Friday. Sarah, prepare the Super H-mode reproducibility protocol. Let's make Q equals 10 happen." },
+      ];
+
+      let idx = 0;
+      let cumDelay = 0;
+
+      const emitNext = () => {
+        if (idx >= SCRIPT.length || !currentSessionId) {
+          testTimer = null;
+          return;
+        }
+        const seg = SCRIPT[idx];
+        const sp = SPEAKERS[seg.speaker];
+        const id = `test-final-${idx}`;
+
+        // Emit transcript to client
+        socket.emit('transcript', {
+          id,
+          speaker: sp.id,
+          speakerLabel: sp.label,
+          text: seg.text,
+          isFinal: true,
+          timestamp: Date.now(),
+        });
+
+        // Buffer transcript (same as normal flow)
+        transcriptBuffer.push(`[${sp.label}]: ${seg.text.slice(0, 500)}`);
+        if (transcriptBuffer.length > 60) {
+          transcriptBuffer = transcriptBuffer.slice(-40);
+        }
+
+        // Feed to Realtime AI (respects echo gate)
+        if (realtime && !ttsPlaying) {
+          realtime.feedTranscript(`[${sp.label}]: ${seg.text}`);
+        }
+
+        // Reset idle timer
+        resetIdleTimer();
+
+        idx++;
+        if (idx < SCRIPT.length) {
+          testTimer = setTimeout(emitNext, SCRIPT[idx].delay);
+        }
+      };
+
+      testTimer = setTimeout(emitNext, SCRIPT[0].delay);
     });
 
     socket.on('session:stop', async ({ sessionId }: { sessionId: string }) => {

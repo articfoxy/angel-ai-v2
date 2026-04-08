@@ -81,6 +81,7 @@ export function StartScreen() {
   const [customInstructions, setCustomInstructions] = useState('');
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isStartingRef = useRef(false); // Double-tap guard for session creation
+  const testModeRef = useRef(false);
 
   // Keep refs so socket callbacks can read the latest values
   const isActiveRef = useRef(false);
@@ -337,6 +338,11 @@ export function StartScreen() {
     await SecureStore.setItemAsync('angel_v2_custom_instructions', text);
   }, []);
 
+  const handleTest = useCallback(() => {
+    testModeRef.current = true;
+    handleToggle();
+  }, []);
+
   const handleAngelActivate = useCallback(() => {
     const sock = getSocket();
     if (!sock?.connected || !isActive) return;
@@ -492,6 +498,12 @@ export function StartScreen() {
 
         socket.emit('session:start', startPayload);
 
+        // If test mode was requested, trigger the test conversation script
+        if (testModeRef.current) {
+          testModeRef.current = false;
+          socket.emit('session:test');
+        }
+
         // Start audio recording and stream raw PCM chunks to the server.
         // Audio is sent as binary (ArrayBuffer) for 33% less bandwidth vs base64.
         // IMPORTANT: We must slice the buffer to get an exact-size copy.
@@ -637,6 +649,10 @@ export function StartScreen() {
           {/* Angel Button */}
           <View style={styles.angelSection}>
             <AngelButton onPress={handleToggle} isActive={false} />
+            <TouchableOpacity style={styles.testButton} onPress={handleTest}>
+              <Ionicons name="flask-outline" size={16} color={colors.primary} />
+              <Text style={styles.testButtonText}>Test with Sample Conversation</Text>
+            </TouchableOpacity>
           </View>
 
           {/* Angel Instructions */}
@@ -834,6 +850,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: spacing.xxl * 1.5,
+  },
+  testButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginTop: spacing.lg,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    borderRadius: 20,
+    backgroundColor: colors.primaryMuted,
+    borderWidth: 1,
+    borderColor: colors.primary + '40',
+  },
+  testButtonText: {
+    color: colors.primary,
+    fontSize: fontSize.sm,
+    fontWeight: '600',
   },
   instructionSection: {
     paddingHorizontal: spacing.lg,
