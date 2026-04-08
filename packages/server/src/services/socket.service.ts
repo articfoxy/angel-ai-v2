@@ -261,23 +261,24 @@ export function setupSocketHandlers(io: Server) {
           },
           onStart: (data) => {
             ttsPlaying = true;
-            // Safety timeout: release echo gate after 30s even if client never confirms
+            // Safety timeout: release echo gate after 15s even if client never confirms
             if (ttsEchoTimer) clearTimeout(ttsEchoTimer);
             ttsEchoTimer = setTimeout(() => {
               if (ttsPlaying) {
-                console.warn('[TTS] Echo gate safety timeout — releasing after 30s');
+                console.warn('[TTS] Echo gate safety timeout — releasing after 15s');
                 ttsPlaying = false;
               }
               ttsEchoTimer = null;
-            }, 30_000);
+            }, 15_000);
             socket.emit('tts:start', data);
           },
           onDone: (data) => {
             socket.emit('tts:done', data);
-            // Release echo gate when Cartesia finishes streaming — don't wait for
-            // client tts:finished which may never arrive if playback fails.
-            ttsPlaying = false;
-            if (ttsEchoTimer) { clearTimeout(ttsEchoTimer); ttsEchoTimer = null; }
+            // ttsPlaying stays true until client confirms playback finished via
+            // tts:finished. This prevents new transcripts from feeding to the AI
+            // while audio is still playing, avoiding premature whisper interruption.
+            // The 30s safety timeout (set in onStart) handles the case where
+            // tts:finished never arrives.
           },
           onError: (error) => {
             console.error('[TTS] Error:', error);
