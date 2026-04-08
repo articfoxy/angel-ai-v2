@@ -43,6 +43,18 @@ sessionsRouter.get('/:id', async (req: AuthRequest, res: Response) => {
 // Create session
 sessionsRouter.post('/', async (req: AuthRequest, res: Response) => {
   try {
+    // Auto-close stale sessions: any session older than 3 hours with no endedAt
+    // is a zombie from a crash/force-quit — mark it ended so it doesn't block new ones.
+    await prisma.session.updateMany({
+      where: {
+        userId: req.userId!,
+        endedAt: null,
+        status: { notIn: ['ended', 'processing'] },
+        startedAt: { lt: new Date(Date.now() - 2 * 60 * 60 * 1000) },
+      },
+      data: { endedAt: new Date(), status: 'ended', summary: 'Session ended (stale cleanup)' },
+    });
+
     // Enforce concurrent session limit — prevent resource abuse
     const activeSessions = await prisma.session.count({
       where: {
@@ -88,6 +100,24 @@ sessionsRouter.delete('/:id', async (req: AuthRequest, res: Response) => {
     res.json({ success: true });
   } catch {
     res.status(500).json({ error: 'Failed to delete session' });
+  }
+});
+
+// Force-close all stale sessions (zombie cleanup)
+sessionsRouter.post('/cleanup', async (req: AuthRequest, res: Response) => {
+  try {
+    const result = await prisma.session.updateMany({
+      where: {
+        userId: req.userId!,
+        endedAt: null,
+        status: { notIn: ['ended', 'processing'] },
+      },
+      data: { endedAt: new Date(), status: 'ended', summary: 'Session ended (manual cleanup)' },
+    });
+
+    res.json({ success: true, cleaned: result.count });
+  } catch {
+    res.status(500).json({ error: 'Failed to clean up sessions' });
   }
 });
 
