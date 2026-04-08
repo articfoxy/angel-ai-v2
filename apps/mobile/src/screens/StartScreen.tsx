@@ -83,6 +83,7 @@ export function StartScreen() {
   const [customInstructions, setCustomInstructions] = useState('');
   const [liveDirective, setLiveDirective] = useState('');
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const testRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isStartingRef = useRef(false); // Double-tap guard for session creation
   const testModeRef = useRef(false);
 
@@ -207,6 +208,7 @@ export function StartScreen() {
       // Server timed out the session
       stopRecording().catch(() => {});
       if (timerRef.current) clearInterval(timerRef.current);
+      if (testRetryRef.current) { clearTimeout(testRetryRef.current); testRetryRef.current = null; }
       setIsActive(false);
       setAngelThinking(false);
       setAiStatus(null);
@@ -240,6 +242,7 @@ export function StartScreen() {
       // Server-side error (e.g., Deepgram connection failed)
       stopRecording().catch(() => {});
       if (timerRef.current) clearInterval(timerRef.current);
+      if (testRetryRef.current) { clearTimeout(testRetryRef.current); testRetryRef.current = null; }
       setIsActive(false);
       setAngelThinking(false);
       setAiStatus(null);
@@ -314,6 +317,7 @@ export function StartScreen() {
       cleanupSessionListeners();
       disconnectSocket();
       if (timerRef.current) clearInterval(timerRef.current);
+      if (testRetryRef.current) { clearTimeout(testRetryRef.current); testRetryRef.current = null; }
     };
   }, [cleanupSessionListeners]);
 
@@ -406,6 +410,7 @@ export function StartScreen() {
             setSpeakerNames({});
             setElapsed(0);
             startPayloadRef.current = null;
+            if (testRetryRef.current) { clearTimeout(testRetryRef.current); testRetryRef.current = null; }
             disposeTTSPlayer();
             cleanupSessionListeners();
             disconnectSocket();
@@ -539,16 +544,16 @@ export function StartScreen() {
           const tryTest = () => {
             attempts++;
             const s = getSocket();
-            if (s?.connected) {
-              // Remove stale listener before adding a new one
-              s.off('test:not-ready');
-              s.emit('session:test');
-              s.once('test:not-ready', () => {
-                if (attempts < 10) setTimeout(tryTest, 1000);
-              });
-            }
+            if (!s?.connected || !isActiveRef.current) return;
+            s.off('test:not-ready');
+            s.emit('session:test');
+            s.once('test:not-ready', () => {
+              if (attempts < 10 && isActiveRef.current) {
+                testRetryRef.current = setTimeout(tryTest, 1000);
+              }
+            });
           };
-          setTimeout(tryTest, 2000); // Initial 2s wait for basic setup
+          testRetryRef.current = setTimeout(tryTest, 2000);
         } else {
           // Start audio recording and stream raw PCM chunks to the server.
           // Audio is sent as binary (ArrayBuffer) for 33% less bandwidth vs base64.
@@ -573,6 +578,7 @@ export function StartScreen() {
         cleanupSessionListeners();
         disconnectSocket();
         if (timerRef.current) clearInterval(timerRef.current);
+        if (testRetryRef.current) { clearTimeout(testRetryRef.current); testRetryRef.current = null; }
         setIsActive(false);
         setIsReconnecting(false);
         setSessionId(null);

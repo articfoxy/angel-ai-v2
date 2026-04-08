@@ -51,6 +51,8 @@ export function setupSocketHandlers(io: Server) {
     let tts: CartesiaTTSService | null = null;
     let ttsPlaying = false; // Echo gate: true while TTS audio plays on client
     let ttsEchoTimer: ReturnType<typeof setTimeout> | null = null; // Safety timeout for echo gate
+    let testTimer: ReturnType<typeof setTimeout> | null = null;
+    let liveDirectives: string[] = [];
 
     function clearAllTimers() {
       if (sessionTimer) { clearTimeout(sessionTimer); sessionTimer = null; }
@@ -277,7 +279,7 @@ export function setupSocketHandlers(io: Server) {
             // ttsPlaying stays true until client confirms playback finished via
             // tts:finished. This prevents new transcripts from feeding to the AI
             // while audio is still playing, avoiding premature whisper interruption.
-            // The 30s safety timeout (set in onStart) handles the case where
+            // The 15s safety timeout (set in onStart) handles the case where
             // tts:finished never arrives.
           },
           onError: (error) => {
@@ -497,7 +499,6 @@ export function setupSocketHandlers(io: Server) {
     });
 
     // Live instruction update — modifies the Realtime AI system prompt mid-session
-    let liveDirectives: string[] = [];
     socket.on('session:instruct', (data: { text: string }) => {
       if (!realtime || !data?.text?.trim()) return;
       const directive = data.text.trim();
@@ -525,7 +526,6 @@ export function setupSocketHandlers(io: Server) {
     });
 
     // ── Test conversation mode ──
-    let testTimer: ReturnType<typeof setTimeout> | null = null;
     socket.on('session:test', () => {
       if (!currentSessionId || !realtime) {
         console.warn('[test] session:test received but session not ready (sessionId:', currentSessionId, 'realtime:', !!realtime, ')');
