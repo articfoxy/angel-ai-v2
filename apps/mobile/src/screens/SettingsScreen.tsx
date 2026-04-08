@@ -550,7 +550,7 @@ export function SettingsScreen() {
               {([
                 { key: 'auto' as const, label: 'Auto', icon: 'swap-horizontal-outline' },
                 { key: 'phone' as const, label: 'Phone Mic', icon: 'phone-portrait-outline' },
-                { key: 'bluetooth' as const, label: 'AirPods / BT', icon: 'bluetooth-outline' },
+                { key: 'bluetooth' as const, label: 'Bluetooth', icon: 'bluetooth-outline' },
               ]).map((opt) => (
                 <TouchableOpacity
                   key={opt.key}
@@ -580,7 +580,7 @@ export function SettingsScreen() {
             <View style={styles.presetGrid}>
               {([
                 { key: 'auto' as const, label: 'Auto', icon: 'swap-horizontal-outline' },
-                { key: 'bluetooth' as const, label: 'AirPods / BT', icon: 'bluetooth-outline' },
+                { key: 'bluetooth' as const, label: 'Bluetooth', icon: 'bluetooth-outline' },
                 { key: 'speaker' as const, label: 'Speaker', icon: 'volume-high-outline' },
               ]).map((opt) => (
                 <TouchableOpacity
