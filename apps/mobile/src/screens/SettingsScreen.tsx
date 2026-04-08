@@ -173,10 +173,16 @@ export function SettingsScreen() {
     }
     setPlayingVoiceId(voiceId);
     try {
-      await Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
+      // Ensure playback mode — allowsRecordingIOS:false exits PlayAndRecord
+      // category which routes to earpiece. This forces speaker output.
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+      });
       const { sound } = await Audio.Sound.createAsync(
         { uri: `${API_URL}/api/voices/preview/${voiceId}` },
-        { shouldPlay: true }
+        { shouldPlay: true, volume: 1.0 }
       );
       soundRef.current = sound;
       sound.setOnPlaybackStatusUpdate((status) => {
