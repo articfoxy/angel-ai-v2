@@ -391,15 +391,17 @@ export function StartScreen() {
       if (isStartingRef.current) return;
       isStartingRef.current = true;
       try {
-        // Request microphone permission before anything else
-        const hasPermission = await requestMicPermission();
-        if (!hasPermission) {
-          Alert.alert(
-            'Microphone Required',
-            'Angel AI needs microphone access to listen to your conversations. Please enable it in Settings.',
-            [{ text: 'OK' }]
-          );
-          return;
+        // Request microphone permission (skip in test mode — no mic needed)
+        if (!testModeRef.current) {
+          const hasPermission = await requestMicPermission();
+          if (!hasPermission) {
+            Alert.alert(
+              'Microphone Required',
+              'Angel AI needs microphone access to listen to your conversations. Please enable it in Settings.',
+              [{ text: 'OK' }]
+            );
+            return;
+          }
         }
 
         const session = await api.post<Session>('sessions', {});
@@ -498,26 +500,28 @@ export function StartScreen() {
 
         socket.emit('session:start', startPayload);
 
-        // If test mode was requested, trigger the test conversation script
-        if (testModeRef.current) {
+        // If test mode — trigger test script and SKIP recording so TTS audio
+        // can play without the recording session claiming the audio hardware.
+        const isTestMode = testModeRef.current;
+        if (isTestMode) {
           testModeRef.current = false;
           socket.emit('session:test');
+        } else {
+          // Start audio recording and stream raw PCM chunks to the server.
+          // Audio is sent as binary (ArrayBuffer) for 33% less bandwidth vs base64.
+          // IMPORTANT: We must slice the buffer to get an exact-size copy.
+          // Uint8Array.buffer can be larger than byteLength if the view is a subarray.
+          await startRecording((pcmBytes: Uint8Array) => {
+            const currentSocket = getSocket();
+            if (currentSocket?.connected) {
+              const exactBuffer = pcmBytes.buffer.slice(
+                pcmBytes.byteOffset,
+                pcmBytes.byteOffset + pcmBytes.byteLength
+              );
+              currentSocket.emit('audio', exactBuffer);
+            }
+          });
         }
-
-        // Start audio recording and stream raw PCM chunks to the server.
-        // Audio is sent as binary (ArrayBuffer) for 33% less bandwidth vs base64.
-        // IMPORTANT: We must slice the buffer to get an exact-size copy.
-        // Uint8Array.buffer can be larger than byteLength if the view is a subarray.
-        await startRecording((pcmBytes: Uint8Array) => {
-          const currentSocket = getSocket();
-          if (currentSocket?.connected) {
-            const exactBuffer = pcmBytes.buffer.slice(
-              pcmBytes.byteOffset,
-              pcmBytes.byteOffset + pcmBytes.byteLength
-            );
-            currentSocket.emit('audio', exactBuffer);
-          }
-        });
         isStartingRef.current = false;
       } catch (err: any) {
         console.error('Failed to start session:', err);
