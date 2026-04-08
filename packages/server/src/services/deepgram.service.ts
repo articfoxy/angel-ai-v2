@@ -70,15 +70,28 @@ export class DeepgramService {
     }
     const deepgram = createClient(apiKey);
 
-    // Map user locale to Deepgram-supported language code.
-    // Deepgram doesn't support all locale variants (e.g. en-SG, en-IE).
+    // Map user locale to Deepgram nova-3 supported language codes.
+    // Source: https://developers.deepgram.com/docs/models-languages-overview
     const LOCALE_MAP: Record<string, string> = {
-      'en-SG': 'en',    // Singapore → generic English
-      'en-IE': 'en-GB', // Ireland → closest: British English
+      'en-SG': 'en',    // Singapore → generic English (en-SG not supported)
+      'en-IE': 'en-GB', // Ireland → British English (en-IE not supported)
     };
     const VALID_DEEPGRAM_LOCALES = new Set([
-      'multi', 'en', 'en-US', 'en-GB', 'en-AU', 'en-IN', 'en-NZ',
-      'zh', 'zh-CN', 'zh-TW', 'es', 'fr', 'de', 'ja', 'ko', 'pt', 'ru', 'hi',
+      'multi',
+      // English variants
+      'en', 'en-US', 'en-AU', 'en-GB', 'en-IN', 'en-NZ',
+      // Chinese
+      'zh', 'zh-CN', 'zh-Hans', 'zh-TW', 'zh-Hant', 'zh-HK',
+      // European
+      'es', 'es-419', 'fr', 'fr-CA', 'de', 'de-CH', 'it', 'pt', 'pt-BR', 'pt-PT',
+      'nl', 'nl-BE', 'da', 'da-DK', 'sv', 'sv-SE', 'no', 'fi', 'pl', 'ro',
+      'el', 'cs', 'sk', 'hu', 'bg', 'hr', 'sr', 'sl', 'bs', 'mk',
+      'lt', 'lv', 'et', 'be', 'uk', 'ca',
+      // Asian
+      'ja', 'ko', 'ko-KR', 'hi', 'bn', 'ta', 'te', 'kn', 'mr', 'ur',
+      'th', 'th-TH', 'vi', 'id', 'ms', 'tl',
+      // Middle Eastern
+      'ar', 'he', 'fa', 'tr', 'ru',
     ]);
     const raw = this.config.speechLocale || 'multi';
     const mapped = LOCALE_MAP[raw] || raw;
