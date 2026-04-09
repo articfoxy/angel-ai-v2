@@ -537,7 +537,7 @@ export function setupSocketHandlers(io: Server) {
       const SPEAKERS = [
         { id: 'speaker_0', label: 'Dr. Chen' },
         { id: 'speaker_1', label: 'Dr. Morrison' },
-        { id: 'speaker_2', label: 'Dr. Patel' },
+        { id: 'speaker_2', label: 'Owner' },
       ];
 
       // Identify speakers
