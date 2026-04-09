@@ -526,52 +526,85 @@ export function setupSocketHandlers(io: Server) {
     });
 
     // ── Test conversation mode ──
-    socket.on('session:test', () => {
+    socket.on('session:test', (data?: { type?: string }) => {
       if (!currentSessionId || !realtime) {
-        console.warn('[test] session:test received but session not ready (sessionId:', currentSessionId, 'realtime:', !!realtime, ')');
+        console.warn('[test] session:test received but session not ready');
         socket.emit('test:not-ready');
         return;
       }
-      console.log('[test] Starting test conversation');
+      const testType = data?.type || 'fusion';
+      console.log(`[test] Starting test conversation: ${testType}`);
 
-      const SPEAKERS = [
-        { id: 'speaker_0', label: 'Dr. Chen' },
-        { id: 'speaker_1', label: 'Dr. Morrison' },
-        { id: 'speaker_2', label: 'Owner' },
-      ];
+      // ── Test scripts by type ──
+      const TEST_SCRIPTS: Record<string, {
+        speakers: { id: string; label: string }[];
+        script: { speaker: number; text: string; delay: number }[];
+      }> = {
+        fusion: {
+          speakers: [
+            { id: 'speaker_0', label: 'Dr. Chen' },
+            { id: 'speaker_1', label: 'Dr. Morrison' },
+            { id: 'speaker_2', label: 'Owner' },
+          ],
+          script: [
+            { speaker: 2, delay: 1000, text: "Good morning. Let's review the latest results from the SPARC tokamak high-field test campaign. Sarah, you want to lead us off?" },
+            { speaker: 0, delay: 7000, text: "Sure. The big headline — we achieved a plasma current of 8.7 mega-amperes in the latest deuterium-tritium shot. The ion temperature peaked at 120 million Kelvin, well above the Lawson criterion threshold." },
+            { speaker: 1, delay: 8000, text: "What about the energy confinement time? Last run we were struggling with neoclassical tearing modes destabilizing the plasma edge." },
+            { speaker: 0, delay: 7000, text: "We deployed a new ECCD profile — electron cyclotron current drive — targeting the q equals 2 rational surface. That fully suppressed the NTMs. Energy confinement time improved to 1.4 seconds." },
+            { speaker: 2, delay: 7000, text: "And the Q factor? That's what the board is waiting for." },
+            { speaker: 0, delay: 6000, text: "Q equals 2.3 for this shot. That's genuine net energy gain. Fusion power output was approximately 140 megawatts thermal against 60 megawatts of auxiliary heating input." },
+            { speaker: 1, delay: 8000, text: "I need to flag a materials concern. The tungsten divertor tiles showed significant sputtering erosion — roughly 3 microns per shot. At this rate, we need a replacement cycle every 200 plasma discharges." },
+            { speaker: 2, delay: 5000, text: "Is that within the design envelope?" },
+            { speaker: 1, delay: 7000, text: "Barely. The neutron flux at the first wall reached 2.4 megawatts per square meter. The RAFM steel — reduced activation ferritic martensitic — is holding up, but we're seeing helium bubble formation at the grain boundaries after 5 dpa." },
+            { speaker: 0, delay: 7000, text: "James, what about the silicon carbide fiber composite as an alternative PFC? The thermal shock resistance should be significantly better." },
+            { speaker: 1, delay: 8000, text: "We have SiC-f samples under neutron irradiation at the IFMIF facility. Early results are mixed — better radiation hardness, but thermal conductivity degrades 40 percent after 10 displacements per atom." },
+            { speaker: 2, delay: 6000, text: "OK, let's move to tritium breeding. We need a TBR above 1.1 for fuel self-sufficiency." },
+            { speaker: 0, delay: 7000, text: "The lithium-lead eutectic blanket modules measured a TBR of 1.08 this campaign. Below target. The beryllium neutron multiplier layer needs to be thicker." },
+            { speaker: 1, delay: 7000, text: "My MCNP Monte Carlo neutronics simulations suggest increasing the beryllium pebble bed from 2 to 3 centimeters. That should push us to 1.14 TBR with acceptable tritium permeation rates through the EUROFER membrane." },
+            { speaker: 0, delay: 8000, text: "Now here's the real breakthrough. We observed a new operating regime we're calling Super H-mode. The pedestal pressure was 30 percent higher than standard H-mode, with zero ELMs — no edge localized modes at all." },
+            { speaker: 2, delay: 5000, text: "That's significant. ELM mitigation has been one of our biggest engineering headaches. What's driving it?" },
+            { speaker: 0, delay: 8000, text: "The bootstrap current fraction reached 65 percent, which reduces external current drive requirements substantially. Gyrokinetic TGLF simulations show turbulent transport is dominated by trapped electron modes rather than the usual ITG modes." },
+            { speaker: 1, delay: 8000, text: "On the magnets — the REBCO high-temperature superconducting coils sustained 20 Tesla on axis with zero quench events. And since they operate at 20 Kelvin instead of 4K for legacy NbTi coils, cryoplant power drops 60 percent." },
+            { speaker: 0, delay: 7000, text: "Alpha particle confinement was excellent too. Fast-ion loss detectors showed under 5 percent alpha losses. Most 3.5 MeV fusion alphas are thermalizing in the core and driving self-heating." },
+            { speaker: 2, delay: 7000, text: "Excellent work. Next DT campaign in three weeks. James, I need your updated neutronics by Friday. Sarah, prepare the Super H-mode reproducibility protocol." },
+          ],
+        },
+        chinese: {
+          speakers: [
+            { id: 'speaker_0', label: 'Owner' },
+            { id: 'speaker_1', label: 'Mr. Wang' },
+            { id: 'speaker_2', label: 'Ms. Li' },
+          ],
+          script: [
+            { speaker: 0, delay: 1000, text: "Hi Mr. Wang, Ms. Li, thanks for meeting today. Let's discuss the supply chain updates for Q3." },
+            { speaker: 1, delay: 7000, text: "好的，我先说一下目前的情况。上个月深圳工厂的产能提升了百分之二十，但是原材料价格涨了不少，特别是锂电池的正极材料。" },
+            { speaker: 2, delay: 8000, text: "对，王总说的没错。碳酸锂的价格从每吨八万涨到了十二万，涨幅百分之五十。这对我们的利润率影响很大。" },
+            { speaker: 0, delay: 7000, text: "That's a significant increase. What's driving the lithium carbonate price spike?" },
+            { speaker: 1, delay: 8000, text: "主要是两个原因。第一，南美的锂矿开采受到了环保政策的限制，产量下降了。第二，新能源汽车的需求增长太快了，特别是比亚迪和特斯拉的订单量翻了一倍。" },
+            { speaker: 2, delay: 7000, text: "我们已经跟三家备选供应商谈过了。宁德时代给了我们一个长期协议的报价，每吨九万五，锁定两年。" },
+            { speaker: 0, delay: 6000, text: "Ninety-five thousand per ton for two years? That sounds reasonable. What are the terms?" },
+            { speaker: 1, delay: 8000, text: "条件是我们需要提前支付百分之三十的定金，而且每个季度的最低采购量不能低于五百吨。如果达不到最低量，违约金是合同总额的百分之五。" },
+            { speaker: 2, delay: 7000, text: "另外还有一个问题，物流成本也涨了。从深圳到东南亚的海运费用涨了百分之四十，因为红海那边的航线还是不稳定。" },
+            { speaker: 0, delay: 6000, text: "So we're looking at both raw material and logistics cost increases. What's the total impact on unit cost?" },
+            { speaker: 1, delay: 8000, text: "综合算下来，每个产品的成本大概增加了十五到二十美金。如果不调整终端售价的话，利润率会从百分之二十五降到百分之十八左右。" },
+            { speaker: 2, delay: 7000, text: "我建议我们可以考虑两个方案。第一是把部分生产转移到越南工厂，那边的人工成本低百分之三十。第二是跟客户重新谈价格，提价百分之八到十。" },
+            { speaker: 0, delay: 7000, text: "Let's explore the Vietnam option. What's the timeline to shift production there?" },
+            { speaker: 1, delay: 8000, text: "越南工厂的新产线预计下个月底可以投产。但是前三个月的良率可能只有百分之八十五，比深圳低大概十个百分点。需要派技术团队过去培训。" },
+            { speaker: 2, delay: 7000, text: "对，我已经安排了陈工和他的团队下周飞河内。另外，越南那边的海关清关流程比较慢，平均要五到七个工作日，比深圳多两天。" },
+            { speaker: 0, delay: 6000, text: "OK, so we'll have a transition period with lower yields and longer shipping. What about the pricing negotiation with clients?" },
+            { speaker: 1, delay: 8000, text: "我跟美国那边的采购经理聊过了，他们可以接受百分之五的涨价，但超过这个幅度的话就要走他们的审批流程，可能需要两到三个月。" },
+            { speaker: 2, delay: 7000, text: "欧洲客户那边比较难谈。他们现在也在砍预算，说最多接受百分之三。不过他们的订单量占我们总收入的百分之四十，不能丢。" },
+            { speaker: 0, delay: 7000, text: "Let's go with five percent for the US and three percent for Europe. Combined with the Vietnam production shift, what does our margin look like?" },
+            { speaker: 1, delay: 7000, text: "如果两个方案同时推进的话，利润率大概能维持在百分之二十一到二十二之间。比现在低一点，但还在可以接受的范围内。" },
+            { speaker: 2, delay: 6000, text: "我觉得这个方案可行。我来起草一个详细的执行计划，下周一之前发给大家审核。" },
+            { speaker: 0, delay: 5000, text: "Great, let's move forward with that plan. Thanks both." },
+          ],
+        },
+      };
 
-      // Identify speakers
-      for (const s of SPEAKERS) {
-        socket.emit('speaker:identified', { speakerId: s.id, label: s.label });
-      }
-
-      const SCRIPT: { speaker: number; text: string; delay: number }[] = [
-        { speaker: 2, delay: 1000, text: "Good morning. Let's review the latest results from the SPARC tokamak high-field test campaign. Sarah, you want to lead us off?" },
-        { speaker: 0, delay: 7000, text: "Sure. The big headline — we achieved a plasma current of 8.7 mega-amperes in the latest deuterium-tritium shot. The ion temperature peaked at 120 million Kelvin, well above the Lawson criterion threshold." },
-        { speaker: 1, delay: 8000, text: "What about the energy confinement time? Last run we were struggling with neoclassical tearing modes destabilizing the plasma edge." },
-        { speaker: 0, delay: 7000, text: "We deployed a new ECCD profile — electron cyclotron current drive — targeting the q equals 2 rational surface. That fully suppressed the NTMs. Energy confinement time improved to 1.4 seconds." },
-        { speaker: 2, delay: 7000, text: "And the Q factor? That's what the board is waiting for." },
-        { speaker: 0, delay: 6000, text: "Q equals 2.3 for this shot. That's genuine net energy gain. Fusion power output was approximately 140 megawatts thermal against 60 megawatts of auxiliary heating input." },
-        { speaker: 1, delay: 8000, text: "I need to flag a materials concern. The tungsten divertor tiles showed significant sputtering erosion — roughly 3 microns per shot. At this rate, we need a replacement cycle every 200 plasma discharges." },
-        { speaker: 2, delay: 5000, text: "Is that within the design envelope?" },
-        { speaker: 1, delay: 7000, text: "Barely. The neutron flux at the first wall reached 2.4 megawatts per square meter. The RAFM steel — reduced activation ferritic martensitic — is holding up, but we're seeing helium bubble formation at the grain boundaries after 5 dpa." },
-        { speaker: 0, delay: 7000, text: "James, what about the silicon carbide fiber composite as an alternative PFC? The thermal shock resistance should be significantly better." },
-        { speaker: 1, delay: 8000, text: "We have SiC-f samples under neutron irradiation at the IFMIF facility. Early results are mixed — better radiation hardness, but thermal conductivity degrades 40 percent after 10 displacements per atom." },
-        { speaker: 2, delay: 6000, text: "OK, let's move to tritium breeding. We need a TBR above 1.1 for fuel self-sufficiency." },
-        { speaker: 0, delay: 7000, text: "The lithium-lead eutectic blanket modules measured a TBR of 1.08 this campaign. Below target. The beryllium neutron multiplier layer needs to be thicker." },
-        { speaker: 1, delay: 7000, text: "My MCNP Monte Carlo neutronics simulations suggest increasing the beryllium pebble bed from 2 to 3 centimeters. That should push us to 1.14 TBR with acceptable tritium permeation rates through the EUROFER membrane." },
-        { speaker: 0, delay: 8000, text: "Now here's the real breakthrough. We observed a new operating regime we're calling Super H-mode. The pedestal pressure was 30 percent higher than standard H-mode, with zero ELMs — no edge localized modes at all." },
-        { speaker: 2, delay: 5000, text: "That's significant. ELM mitigation has been one of our biggest engineering headaches. What's driving it?" },
-        { speaker: 0, delay: 8000, text: "The bootstrap current fraction reached 65 percent, which reduces external current drive requirements substantially. Gyrokinetic TGLF simulations show turbulent transport is dominated by trapped electron modes rather than the usual ITG modes. Completely different optimization landscape." },
-        { speaker: 1, delay: 8000, text: "On the magnets — the REBCO high-temperature superconducting coils sustained 20 Tesla on axis with zero quench events. And since they operate at 20 Kelvin instead of 4K for legacy NbTi coils, cryoplant power drops 60 percent." },
-        { speaker: 0, delay: 7000, text: "Alpha particle confinement was excellent too. Fast-ion loss detectors showed under 5 percent alpha losses. Most 3.5 MeV fusion alphas are thermalizing in the core and driving self-heating. We did see residual toroidal Alfvén eigenmodes above the TAE gap frequency, but ICRH tail modification is keeping them stable." },
-        { speaker: 2, delay: 7000, text: "Let's talk path to commercial. Our target is a pilot plant at 500 megawatts electric by 2035. Based on today's data, where do we stand?" },
-        { speaker: 0, delay: 6000, text: "If Super H-mode reproduces and we demonstrate Q equals 10, the physics basis is complete. The main risk shifts entirely to engineering." },
-        { speaker: 1, delay: 8000, text: "Agreed. Three key engineering gaps: first, structural materials that withstand 20 dpa without property degradation. Second, a tritium fuel cycle processing 300 grams per day with less than one percent inventory losses. Third, extending from 8-second pulses to true steady-state operation — probably needs a full non-inductive current drive solution." },
-        { speaker: 2, delay: 7000, text: "What about the stellarator path? Wendelstein 7-X just published their latest results." },
-        { speaker: 0, delay: 7000, text: "Stellarators have intrinsic steady-state advantage since they don't rely on inductively-driven plasma current. But the complex 3D magnetic geometry makes divertor engineering extremely difficult. Tokamaks remain the faster path to net electricity." },
-        { speaker: 2, delay: 7000, text: "Excellent work. Next DT campaign in three weeks. James, I need your updated neutronics by Friday. Sarah, prepare the Super H-mode reproducibility protocol. Let's make Q equals 10 happen." },
-      ];
+      const test = TEST_SCRIPTS[testType] || TEST_SCRIPTS.fusion;
+      const SPEAKERS = test.speakers;
+      const SCRIPT = test.script;
 
       let idx = 0;
       let cumDelay = 0;

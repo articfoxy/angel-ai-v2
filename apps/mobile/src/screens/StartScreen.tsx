@@ -86,6 +86,7 @@ export function StartScreen() {
   const testRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isStartingRef = useRef(false); // Double-tap guard for session creation
   const testModeRef = useRef(false);
+  const testTypeRef = useRef<string>('fusion');
 
   // Keep refs so socket callbacks can read the latest values
   const isActiveRef = useRef(false);
@@ -363,8 +364,17 @@ export function StartScreen() {
   }, [liveDirective]);
 
   const handleTest = () => {
-    testModeRef.current = true;
-    handleToggle();
+    Alert.alert('Test Conversation', 'Choose a scenario:', [
+      {
+        text: '🔬 Nuclear Fusion (Jargon)',
+        onPress: () => { testTypeRef.current = 'fusion'; testModeRef.current = true; handleToggle(); },
+      },
+      {
+        text: '🇨🇳 Chinese Business Meeting',
+        onPress: () => { testTypeRef.current = 'chinese'; testModeRef.current = true; handleToggle(); },
+      },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
   };
 
   const handleAngelActivate = useCallback(() => {
@@ -546,7 +556,7 @@ export function StartScreen() {
             const s = getSocket();
             if (!s?.connected || !isActiveRef.current) return;
             s.off('test:not-ready');
-            s.emit('session:test');
+            s.emit('session:test', { type: testTypeRef.current });
             s.once('test:not-ready', () => {
               if (attempts < 10 && isActiveRef.current) {
                 testRetryRef.current = setTimeout(tryTest, 1000);
