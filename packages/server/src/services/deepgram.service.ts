@@ -70,35 +70,10 @@ export class DeepgramService {
     }
     const deepgram = createClient(apiKey);
 
-    // Map user locale to Deepgram nova-3 supported language codes.
-    // Source: https://developers.deepgram.com/docs/models-languages-overview
-    const LOCALE_MAP: Record<string, string> = {
-      'en-SG': 'en',    // Singapore → generic English (en-SG not supported)
-      'en-IE': 'en-GB', // Ireland → British English (en-IE not supported)
-    };
-    const VALID_DEEPGRAM_LOCALES = new Set([
-      'multi',
-      // English variants
-      'en', 'en-US', 'en-AU', 'en-GB', 'en-IN', 'en-NZ',
-      // Chinese
-      'zh', 'zh-CN', 'zh-Hans', 'zh-TW', 'zh-Hant', 'zh-HK',
-      // European
-      'es', 'es-419', 'fr', 'fr-CA', 'de', 'de-CH', 'it', 'pt', 'pt-BR', 'pt-PT',
-      'nl', 'nl-BE', 'da', 'da-DK', 'sv', 'sv-SE', 'no', 'fi', 'pl', 'ro',
-      'el', 'cs', 'sk', 'hu', 'bg', 'hr', 'sr', 'sl', 'bs', 'mk',
-      'lt', 'lv', 'et', 'be', 'uk', 'ca',
-      // Asian
-      'ja', 'ko', 'ko-KR', 'hi', 'bn', 'ta', 'te', 'kn', 'mr', 'ur',
-      'th', 'th-TH', 'vi', 'id', 'ms', 'tl',
-      // Middle Eastern
-      'ar', 'he', 'fa', 'tr', 'ru',
-    ]);
-    const raw = this.config.speechLocale || 'multi';
-    const mapped = LOCALE_MAP[raw] || raw;
-    const language = VALID_DEEPGRAM_LOCALES.has(mapped) ? mapped : 'multi';
-    if (raw !== language) {
-      console.warn(`[Deepgram] Locale "${raw}" → "${language}"`);
-    }
+    // Always use multilingual mode — conversations may mix languages
+    // (e.g. someone speaks Chinese, owner speaks English). The speech
+    // locale setting is reserved for future single-language optimizations.
+    const language = 'multi';
 
     const dgOptions: Record<string, unknown> = {
       model: 'nova-3',
