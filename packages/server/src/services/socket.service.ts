@@ -7,6 +7,7 @@ import { SearchService } from './search.service';
 import { RealtimeService, buildAngelInstructions } from './realtime.service';
 import { ExtractionService } from './memory/extraction.service';
 import { runPostSessionReflection } from './memory/reflection.service';
+import { RetrievalService } from './memory/retrieval.service';
 import { CartesiaTTSService } from './tts.service';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
@@ -53,6 +54,8 @@ export function setupSocketHandlers(io: Server) {
     let ttsEchoTimer: ReturnType<typeof setTimeout> | null = null; // Safety timeout for echo gate
     let testTimer: ReturnType<typeof setTimeout> | null = null;
     let liveDirectives: string[] = [];
+    let transcriptsSinceMemoryRefresh = 0;
+    const MEMORY_REFRESH_INTERVAL = 10; // Refresh memory context every N final transcripts
 
     function clearAllTimers() {
       if (sessionTimer) { clearTimeout(sessionTimer); sessionTimer = null; }
@@ -88,16 +91,29 @@ export function setupSocketHandlers(io: Server) {
       // Execute actions if the model returned a command
       if (whisper.action === 'save_memory' && whisper.actionData) {
         try {
-          await prisma.memory.create({
+          const memContent = String(whisper.actionData.content || whisper.content);
+          const mem = await prisma.memory.create({
             data: {
               userId,
-              content: String(whisper.actionData.content || whisper.content),
+              content: memContent,
               importance: Number(whisper.actionData.importance) || 7,
               category: String(whisper.actionData.category || 'fact'),
               source: currentSessionId || 'voice_command',
             },
           });
-          console.log(`[agent] Saved memory for user ${userId}: ${whisper.actionData.content}`);
+          console.log(`[agent] Saved memory for user ${userId}: ${memContent}`);
+
+          // Generate embedding async so the memory is retrievable via vector search
+          (async () => {
+            try {
+              const retrieval = new RetrievalService();
+              const embedding = await retrieval.getEmbedding(memContent);
+              await prisma.$executeRaw`UPDATE "Memory" SET embedding = ${JSON.stringify(embedding)}::vector WHERE id = ${mem.id}`;
+              console.log(`[agent] Embedding saved for memory ${mem.id}`);
+            } catch (embErr) {
+              console.warn('[agent] Embedding generation skipped:', (embErr as any)?.message?.slice(0, 60));
+            }
+          })();
         } catch (memErr) {
           console.error('[agent] Failed to save memory:', memErr);
           whisper.content = 'Failed to save to memory. I\'ll try again next time.';
@@ -223,10 +239,21 @@ export function setupSocketHandlers(io: Server) {
         const ownerLanguage = ALLOWED_OWNER_LANGUAGES.includes(payload.ownerLanguage as string)
           ? (payload.ownerLanguage as string)
           : 'English';
+
+        // Retrieve user memories for context injection
+        let memoryContext = '';
+        try {
+          const retrieval = new RetrievalService(openaiKey);
+          memoryContext = await retrieval.buildContext(userId, '', 2000);
+          console.log(`[session] Memory context: ${memoryContext.length} chars`);
+        } catch (memErr) {
+          console.warn('[session] Memory retrieval skipped:', (memErr as any)?.message?.slice(0, 80));
+        }
+
         console.log(`[session] Owner language: ${ownerLanguage}, Instructions length: ${userInstructions.length}`);
         realtime = new RealtimeService({
           apiKey: openaiKey,
-          instructions: buildAngelInstructions(userInstructions, ownerLanguage),
+          instructions: buildAngelInstructions(userInstructions, ownerLanguage, memoryContext),
           onWhisper: (whisper) => {
             handleRealtimeWhisper(userId, whisper).catch((err) => {
               console.error('[Realtime] Whisper handling error:', err);
@@ -323,6 +350,35 @@ export function setupSocketHandlers(io: Server) {
             transcriptBuffer.push(`[${label}]: ${data.text.slice(0, 500)}`);
             if (transcriptBuffer.length > 60) {
               transcriptBuffer = transcriptBuffer.slice(-40);
+            }
+
+            // Periodic memory refresh — inject fresh memories as conversation evolves
+            transcriptsSinceMemoryRefresh++;
+            if (transcriptsSinceMemoryRefresh >= MEMORY_REFRESH_INTERVAL && realtime && socket.userId) {
+              transcriptsSinceMemoryRefresh = 0;
+              const recentText = transcriptBuffer.slice(-5).join(' ');
+              const uid = socket.userId;
+              // Async — don't block transcript flow
+              (async () => {
+                try {
+                  const retrieval = new RetrievalService();
+                  const freshMemory = await retrieval.buildContext(uid, recentText, 2000);
+                  if (realtime && freshMemory.length > 50) {
+                    const baseInstructions = realtime.instructions.split('\n## WHAT YOU REMEMBER')[0];
+                    const memSection = `\n## WHAT YOU REMEMBER ABOUT THE USER\n${freshMemory.trim()}\n`;
+                    realtime.updateInstructions(
+                      baseInstructions.split('\n\n## LIVE DIRECTIVES')[0] + memSection +
+                      (liveDirectives.length > 0
+                        ? '\n\n## LIVE DIRECTIVES (from the user during this session)\n' +
+                          liveDirectives.map((d, i) => `${i + 1}. ${d}`).join('\n')
+                        : '')
+                    );
+                    console.log(`[session] Memory context refreshed (${freshMemory.length} chars)`);
+                  }
+                } catch (e) {
+                  console.warn('[session] Memory refresh failed:', (e as any)?.message?.slice(0, 60));
+                }
+              })();
             }
 
             // Feed transcript to Realtime API (always-active Angel)

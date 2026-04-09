@@ -145,6 +145,34 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'dev-secret') {
 }
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Angel AI v2 server running on port ${PORT}`);
+
+// Enable pgvector extension and create indices on startup (idempotent)
+async function initDatabase() {
+  try {
+    await prisma.$executeRawUnsafe('CREATE EXTENSION IF NOT EXISTS vector');
+    console.log('[db] pgvector extension enabled');
+    // Create vector indices (IF NOT EXISTS is safe to run repeatedly)
+    await prisma.$executeRawUnsafe(`
+      CREATE INDEX IF NOT EXISTS idx_memory_embedding
+      ON "Memory" USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE INDEX IF NOT EXISTS idx_entity_embedding
+      ON "Entity" USING ivfflat (embedding vector_cosine_ops) WITH (lists = 50)
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE INDEX IF NOT EXISTS idx_reflection_embedding
+      ON "Reflection" USING ivfflat (embedding vector_cosine_ops) WITH (lists = 50)
+    `);
+    console.log('[db] Vector indices ready');
+  } catch (err: any) {
+    // Non-fatal: pgvector may not be available on some PostgreSQL hosts
+    console.warn('[db] pgvector setup skipped:', err?.message?.slice(0, 100));
+  }
+}
+
+initDatabase().then(() => {
+  server.listen(PORT, () => {
+    console.log(`Angel AI v2 server running on port ${PORT}`);
+  });
 });

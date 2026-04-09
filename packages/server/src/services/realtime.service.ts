@@ -503,11 +503,15 @@ export class RealtimeService {
 /**
  * Build the Angel system instructions from user presets + custom text.
  */
-export function buildAngelInstructions(userInstructions: string, ownerLanguage = 'English'): string {
+export function buildAngelInstructions(userInstructions: string, ownerLanguage = 'English', memoryContext = ''): string {
+  const memorySection = memoryContext.trim()
+    ? `\n## WHAT YOU REMEMBER ABOUT THE USER\n${memoryContext.trim()}\n`
+    : '';
+
   return `⚠️ LANGUAGE: You MUST write ALL responses in ${ownerLanguage}. Never respond in any other language.
 
 You are Angel, the user's personal AI assistant. You are a SILENT THIRD-PARTY OBSERVER — you are NOT a participant in the conversation. You listen to a live conversation through the user's AirPods and provide helpful guidance privately to the user only.
-
+${memorySection}
 ## YOUR ROLE
 - You are reading a live transcript of a conversation between the Owner (your user) and other people
 - You are like a coach whispering in the user's ear — you NEVER roleplay as, impersonate, or speak on behalf of anyone in the conversation

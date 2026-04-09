@@ -68,6 +68,25 @@ memoryRouter.get('/memories', async (req: AuthRequest, res: Response) => {
   }
 });
 
+// Delete a memory (soft-delete by setting validTo)
+memoryRouter.delete('/memories/:id', async (req: AuthRequest, res: Response) => {
+  try {
+    const memId = req.params.id as string;
+    const mem = await prisma.memory.findFirst({
+      where: { id: memId, userId: req.userId },
+    });
+    if (!mem) return res.status(404).json({ error: 'Memory not found' });
+
+    await prisma.memory.update({
+      where: { id: memId },
+      data: { validTo: new Date() },
+    });
+    res.json({ success: true });
+  } catch {
+    res.status(500).json({ error: 'Failed to delete memory' });
+  }
+});
+
 // List reflections
 memoryRouter.get('/reflections', async (req: AuthRequest, res: Response) => {
   try {
