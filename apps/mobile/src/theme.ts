@@ -16,27 +16,27 @@ export const colors = {
   // Accent
   primary: '#7c7fff',
   primaryHover: '#9b9eff',
-  primaryMuted: 'rgba(124, 127, 255, 0.12)',
+  primaryMuted: 'rgba(124, 127, 255, 0.15)',
   primaryBorder: 'rgba(124, 127, 255, 0.25)',
 
   // Semantic
   success: '#34d399',
-  successMuted: 'rgba(52, 211, 153, 0.12)',
+  successMuted: 'rgba(52, 211, 153, 0.15)',
   warning: '#fbbf24',
-  warningMuted: 'rgba(251, 191, 36, 0.12)',
+  warningMuted: 'rgba(251, 191, 36, 0.15)',
   danger: '#f87171',
-  dangerMuted: 'rgba(248, 113, 113, 0.12)',
+  dangerMuted: 'rgba(248, 113, 113, 0.15)',
   info: '#38bdf8',
-  infoMuted: 'rgba(56, 189, 248, 0.12)',
+  infoMuted: 'rgba(56, 189, 248, 0.15)',
 
   // Text
   text: '#ececf1',
   textSecondary: '#8e8ea0',
-  textTertiary: '#565669',
+  textTertiary: '#6e6e82',
 
   // Structure
-  border: 'rgba(255, 255, 255, 0.06)',
-  borderSubtle: 'rgba(255, 255, 255, 0.04)',
+  border: 'rgba(255, 255, 255, 0.10)',
+  borderSubtle: 'rgba(255, 255, 255, 0.07)',
   divider: 'rgba(255, 255, 255, 0.05)',
   overlay: 'rgba(0, 0, 0, 0.6)',
 } as const;

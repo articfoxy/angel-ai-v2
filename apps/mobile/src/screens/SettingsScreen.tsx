@@ -965,6 +965,7 @@ const styles = StyleSheet.create({
   voiceChipActive: {
     borderColor: colors.primary,
     backgroundColor: colors.primaryMuted,
+    transform: [{ scale: 1.03 }],
   },
   voiceChipHeader: {
     flexDirection: 'row',

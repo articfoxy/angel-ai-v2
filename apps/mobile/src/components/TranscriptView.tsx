@@ -302,10 +302,10 @@ const styles = StyleSheet.create({
     borderRadius: 3,
   },
   speakerName: {
-    fontSize: fontSize.xs,
+    fontSize: fontSize.sm,
     fontWeight: '700',
     textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    letterSpacing: 0.5,
   },
   textContainer: {
     paddingLeft: spacing.sm,
@@ -345,7 +345,7 @@ const styles = StyleSheet.create({
     gap: 3,
   },
   whisperLabel: {
-    fontSize: 10,
+    fontSize: fontSize.xs,
     fontWeight: '700',
     letterSpacing: 0.3,
     textTransform: 'uppercase',

@@ -173,7 +173,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   label: {
-    marginTop: spacing.lg,
+    marginTop: spacing.md,
     color: colors.textSecondary,
     fontSize: fontSize.md,
     fontWeight: '500',

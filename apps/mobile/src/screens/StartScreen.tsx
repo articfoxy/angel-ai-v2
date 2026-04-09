@@ -82,6 +82,8 @@ export function StartScreen() {
   const [activePresets, setActivePresets] = useState<string[]>([]);
   const [customInstructions, setCustomInstructions] = useState('');
   const [liveDirective, setLiveDirective] = useState('');
+  const [instructionsFocused, setInstructionsFocused] = useState(false);
+  const [directiveFocused, setDirectiveFocused] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const testRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isStartingRef = useRef(false); // Double-tap guard for session creation
@@ -338,6 +340,7 @@ export function StartScreen() {
   }, []);
 
   const togglePreset = useCallback(async (presetId: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setActivePresets((prev) => {
       const updated = prev.includes(presetId)
         ? prev.filter((p) => p !== presetId)
@@ -648,9 +651,11 @@ export function StartScreen() {
           {/* Live directive input */}
           <View style={styles.directiveRow}>
             <TextInput
-              style={styles.directiveInput}
+              style={[styles.directiveInput, directiveFocused && styles.inputFocused]}
               value={liveDirective}
               onChangeText={setLiveDirective}
+              onFocus={() => setDirectiveFocused(true)}
+              onBlur={() => setDirectiveFocused(false)}
               placeholder="Instruct Angel live..."
               placeholderTextColor={colors.textTertiary}
               returnKeyType="send"
@@ -772,9 +777,11 @@ export function StartScreen() {
               ))}
             </View>
             <TextInput
-              style={styles.customInput}
+              style={[styles.customInput, instructionsFocused && styles.inputFocused]}
               value={customInstructions}
               onChangeText={saveCustomInstructions}
+              onFocus={() => setInstructionsFocused(true)}
+              onBlur={() => setInstructionsFocused(false)}
               placeholder="Custom instructions for Angel..."
               placeholderTextColor={colors.textTertiary}
               multiline
@@ -878,8 +885,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    gap: spacing.xs,
+    paddingVertical: spacing.sm,
+    gap: spacing.sm,
     borderTopWidth: 1,
     borderTopColor: colors.border,
   },
@@ -896,6 +903,10 @@ const styles = StyleSheet.create({
   },
   directiveSend: {
     padding: 2,
+  },
+  inputFocused: {
+    borderColor: colors.primary,
+    backgroundColor: colors.surfaceRaised,
   },
   askAngelBtn: {
     flexDirection: 'row',
@@ -962,16 +973,16 @@ const styles = StyleSheet.create({
   angelSection: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: spacing.xxl * 1.5,
+    paddingVertical: spacing.xxl,
   },
   testButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.xs,
+    gap: spacing.sm,
     marginTop: spacing.lg,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.sm + 4,
     paddingHorizontal: spacing.lg,
-    borderRadius: 20,
+    borderRadius: 22,
     backgroundColor: colors.primaryMuted,
     borderWidth: 1,
     borderColor: colors.primary + '40',
@@ -1028,11 +1039,11 @@ const styles = StyleSheet.create({
   },
   historySection: { marginTop: spacing.sm },
   sectionTitle: {
-    color: colors.textTertiary,
-    fontSize: fontSize.xs,
-    fontWeight: '600',
+    color: colors.textSecondary,
+    fontSize: fontSize.sm,
+    fontWeight: '700',
     textTransform: 'uppercase',
-    letterSpacing: 1,
+    letterSpacing: 0.8,
     paddingHorizontal: spacing.lg,
     marginBottom: spacing.md,
   },

@@ -67,7 +67,7 @@ export function SessionCard({ session, onPress, onDelete }: SessionCardProps) {
         {/* Center: summary & speakers */}
         <View style={styles.center}>
           {summaryText ? (
-            <Text style={styles.summary} numberOfLines={2}>
+            <Text style={styles.summary} numberOfLines={3}>
               {summaryText}
             </Text>
           ) : (
@@ -108,7 +108,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     padding: spacing.md,
     marginHorizontal: spacing.lg,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.md,
     borderWidth: 1,
     borderColor: colors.border,
   },
