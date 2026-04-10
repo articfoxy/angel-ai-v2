@@ -201,6 +201,10 @@ export function setupSocketHandlers(io: Server) {
       byok?: { provider: string; apiKey: string; model?: string };
       speech?: { keywords?: string[]; speechLocale?: string };
       instructions?: string;
+      mode?: 'translation' | 'intelligence' | 'hybrid';
+      translateLanguages?: string[];
+      intelligencePresets?: string[];
+      customInstructions?: string;
       ownerLanguage?: string;
       voiceId?: string;
     }) => {
@@ -245,24 +249,27 @@ export function setupSocketHandlers(io: Server) {
         : 'English';
 
       if (openaiKey) {
-        const userInstructions = payload.instructions || 'Help me with jargon and provide useful insights.';
+        const sessionMode = payload.mode || 'intelligence';
+        const translateLanguages = payload.translateLanguages || [];
+        const intPresets = payload.intelligencePresets || ['jargon'];
+        const customInstr = payload.customInstructions || '';
 
         // Retrieve user memories for context injection
         let memoryContext = '';
         try {
           const retrieval = new RetrievalService(openaiKey);
-          // Use instructions as initial query — gives semantically relevant memories
-          memoryContext = await retrieval.buildContext(userId, userInstructions, 2000);
+          memoryContext = await retrieval.buildContext(userId, customInstr || 'general context', 2000);
           console.log(`[session] Memory context: ${memoryContext.length} chars`);
         } catch (memErr) {
           console.warn('[session] Memory retrieval skipped:', (memErr as any)?.message?.slice(0, 80));
         }
 
-        console.log(`[session] Owner language: ${ownerLanguage}, Instructions length: ${userInstructions.length}`);
+        console.log(`[session] Mode: ${sessionMode}, Language: ${ownerLanguage}, Translate: [${translateLanguages}], Presets: [${intPresets}]`);
         realtime = new RealtimeService({
           apiKey: openaiKey,
           ownerLanguage,
-          instructions: buildAngelInstructions(userInstructions, ownerLanguage, memoryContext),
+          mode: sessionMode,
+          instructions: buildAngelInstructions(ownerLanguage, sessionMode, translateLanguages, intPresets, customInstr, memoryContext),
           onWhisper: (whisper) => {
             handleRealtimeWhisper(userId, whisper).catch((err) => {
               console.error('[Realtime] Whisper handling error:', err);

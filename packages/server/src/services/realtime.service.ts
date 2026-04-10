@@ -22,17 +22,23 @@ interface RealtimeConfig {
   apiKey: string;
   instructions: string;
   ownerLanguage?: string;
+  mode?: 'translation' | 'intelligence' | 'hybrid';
   onWhisper: (whisper: RealtimeWhisper) => void;
   onError?: (error: string) => void;
   onStatus?: (status: 'connected' | 'reconnecting' | 'disconnected' | 'error') => void;
 }
 
-// Use the full model — mini may not support text-only realtime well
 const REALTIME_URL = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview';
 const RECONNECT_DELAY_MS = 2000;
 const MAX_RECONNECT_ATTEMPTS = 5;
-// Trigger a response after this many new transcript lines
-const TRANSCRIPT_TRIGGER_THRESHOLD = 3;
+
+function getTriggerThreshold(mode?: string): number {
+  switch (mode) {
+    case 'translation': return 1;
+    case 'hybrid': return 2;
+    default: return 3;
+  }
+}
 // Safety timeout to unstick responseInProgress if response.done never arrives
 const RESPONSE_TIMEOUT_MS = 15000;
 
@@ -48,10 +54,14 @@ export class RealtimeService {
   private responseTimeout: ReturnType<typeof setTimeout> | null = null;
   private sessionConfigured = false;
   private ownerLanguage = 'English';
+  private mode: string;
+  private triggerThreshold: number;
 
   constructor(config: RealtimeConfig) {
     this.config = config;
     this.ownerLanguage = config.ownerLanguage || 'English';
+    this.mode = config.mode || 'intelligence';
+    this.triggerThreshold = getTriggerThreshold(this.mode);
   }
 
   /** Whether the Realtime session is connected and configured */
@@ -196,7 +206,7 @@ export class RealtimeService {
     this.linesSinceLastResponse++;
 
     // Auto-trigger response after threshold
-    if (this.linesSinceLastResponse >= TRANSCRIPT_TRIGGER_THRESHOLD && !this.responseInProgress) {
+    if (this.linesSinceLastResponse >= this.triggerThreshold && !this.responseInProgress) {
       // Inject language reminder right before the AI responds — this is the
       // last thing the model sees before generating, so it's the strongest signal
       this.send({
@@ -210,6 +220,22 @@ export class RealtimeService {
       console.log(`[Realtime] Triggering auto-response after ${this.linesSinceLastResponse} lines`);
       this.requestResponse();
     }
+  }
+
+  /** Build per-response instructions based on mode */
+  private getResponseInstructions(force = false): string {
+    const lang = this.ownerLanguage;
+    const langRule = `⚠️ ALL output MUST be in ${lang}. Never write content in any other language.`;
+    const skipRule = force ? 'You MUST respond — do NOT skip.' : 'Return {"skip":true} if nothing useful.';
+
+    if (this.mode === 'translation') {
+      return `${langRule} You are a TRANSLATOR. Translate the most recent foreign-language lines into ${lang}. Format: {"type":"translation","content":"[Speaker] said: [${lang} translation]"}. Skip lines already in ${lang}. Skip filler/greetings. ${skipRule} Valid JSON only.`;
+    }
+    if (this.mode === 'hybrid') {
+      return `${langRule} PRIORITY 1: Translate any foreign-language lines into ${lang}. PRIORITY 2: Provide intelligence insights. Format: {"type":"translation"|"insight"|"definition","content":"..."}. ${skipRule} Valid JSON only.`;
+    }
+    // intelligence mode
+    return `${langRule} Analyze the recent transcript. Provide useful insights based on your instructions. Format: {"type":"insight"|"definition"|"action"|"warning","content":"..."}. ${skipRule} Valid JSON only.`;
   }
 
   /**
@@ -227,7 +253,7 @@ export class RealtimeService {
       type: 'response.create',
       response: {
         modalities: ['text'],
-        instructions: `⚠️ LANGUAGE RULE: Write your "content" value in ${this.ownerLanguage} ONLY. Even if people spoke Chinese/Spanish/other languages — your output MUST be ${this.ownerLanguage}. Analyze the recent transcript. Respond with a JSON whisper if useful, or {"skip":true}. Valid JSON only. Remember: content in ${this.ownerLanguage}.`,
+        instructions: this.getResponseInstructions(false),
       },
     });
   }
@@ -258,7 +284,7 @@ export class RealtimeService {
       type: 'response.create',
       response: {
         modalities: ['text'],
-        instructions: `⚠️ LANGUAGE RULE: Write your "content" value in ${this.ownerLanguage} ONLY. Even if people spoke Chinese/Spanish/other languages — your output MUST be ${this.ownerLanguage}. The user activated you. Analyze ALL recent transcript and provide a helpful response. Do NOT skip. Valid JSON only. Remember: content in ${this.ownerLanguage}.`,
+        instructions: this.getResponseInstructions(true),
       },
     });
   }
@@ -513,55 +539,113 @@ export class RealtimeService {
   }
 }
 
+const INTELLIGENCE_PRESET_MAP: Record<string, string> = {
+  jargon: 'Explain any jargon, acronyms, or technical terms used in the conversation.',
+  meeting: 'Track action items, decisions, and key takeaways from the conversation.',
+  coach: 'Give me tips on my communication — tone, clarity, persuasiveness.',
+  fact_check: 'Flag any inaccuracies, contradictions, or questionable claims.',
+  sales: 'Help me navigate the sales conversation — objection handling, closing techniques, value framing.',
+  learn: 'Help me learn from the conversation — summarize key points, explain concepts, suggest follow-ups.',
+};
+
 /**
- * Build the Angel system instructions from user presets + custom text.
+ * Build Angel system instructions based on mode.
  */
-export function buildAngelInstructions(userInstructions: string, ownerLanguage = 'English', memoryContext = ''): string {
+export function buildAngelInstructions(
+  ownerLanguage: string,
+  mode: string,
+  translateLanguages: string[],
+  intelligencePresets: string[],
+  customInstructions: string,
+  memoryContext: string,
+): string {
+  const lang = ownerLanguage || 'English';
   const memorySection = memoryContext.trim()
     ? `\n\n## WHAT YOU REMEMBER ABOUT THE USER\n${memoryContext.trim()}`
     : '';
 
-  return `⚠️ LANGUAGE: You MUST write ALL responses in ${ownerLanguage}. Never respond in any other language.
+  const langRule = `⚠️ LANGUAGE: You MUST write ALL responses in ${lang}. Never respond in any other language.`;
+  const langList = translateLanguages.length > 0 ? translateLanguages.join(', ') : 'any foreign language';
 
-You are Angel, the user's personal AI assistant. You are a SILENT THIRD-PARTY OBSERVER — you are NOT a participant in the conversation. You listen to a live conversation through the user's AirPods and provide helpful guidance privately to the user only.
-
-## YOUR ROLE
-- You are reading a live transcript of a conversation between the Owner (your user) and other people
-- You are like a coach whispering in the user's ear — you NEVER roleplay as, impersonate, or speak on behalf of anyone in the conversation
-- You observe from a 3rd-person perspective and provide insights, translations, and guidance TO the user
-- You are NOT part of the conversation — never say "I agree" or respond as if someone is talking to you (unless the Owner says "Angel,...")
-- The Owner's language is ${ownerLanguage} — ALL your "content" values MUST be in ${ownerLanguage}, no matter what language is spoken
-
-## USER'S INSTRUCTIONS
-${userInstructions}
-
-## HOW TO RESPOND
-You receive transcript lines labeled [Owner] (the user) and [Person A], [Person B], etc. (others).
-
-When you detect something useful based on the user's instructions, respond with a JSON object:
-- Translation: { "type": "translation", "content": "[Speaker] said: [${ownerLanguage} translation]" }
-- Definition/jargon: { "type": "definition", "content": "TERM — explanation" }
-- Insight/guidance: { "type": "insight", "content": "observation or suggestion for the Owner" }
-- Action item: { "type": "action", "content": "action to take" }
-- Warning: { "type": "warning", "content": "watch out for..." }
-- Direct answer: { "type": "response", "content": "your answer" }
-
-If the Owner speaks directly to you ("Angel, remember...", "Angel, search...", "Hey Angel..."), ALWAYS respond:
+  const commonRules = `
+## VOICE COMMANDS
+If the Owner says "Angel, remember...", "Angel, search...", or "Hey Angel...":
 - Memory save: call the save_memory function
 - Web search: call the web_search function
 - Question: { "type": "response", "content": "answer" }
-- Behavioral command (e.g. "Angel, be more concise", "Angel, translate everything", "Angel, explain jargons"): acknowledge with { "type": "response", "content": "Got it, [brief confirmation]" } and adjust your behavior for all subsequent responses
+- Behavioral command: { "type": "response", "content": "Got it, [confirmation]" }
 
-If nothing useful to say, respond: { "skip": true }
-
-## CRITICAL: LANGUAGE RULE
-Your "content" field MUST ALWAYS be written in ${ownerLanguage}. Even if the conversation is in Chinese, Spanish, or any other language, your JSON "content" value must be in ${ownerLanguage}. No exceptions.
-
-## OTHER RULES
-- You are a 3rd-party observer — NEVER roleplay as or impersonate anyone in the conversation
-- Your output MUST be a single JSON object — no plain text, no markdown, no explanation
-- Be concise: 1-2 sentences max in the "content" field
+## RULES
+- You are a 3rd-party observer — NEVER roleplay as anyone in the conversation
+- Output MUST be a single JSON object — no plain text, no markdown
+- Be concise: 1-2 sentences max in "content"
 - Never repeat yourself
-- Prioritize the user's instructions above all else
-- Only respond when you have genuinely useful information${memorySection}`;
+- If nothing useful: { "skip": true }
+- ALL "content" values MUST be in ${lang}. No exceptions.${customInstructions ? `\n\n## CUSTOM INSTRUCTIONS\n${customInstructions}` : ''}${memorySection}`;
+
+  if (mode === 'translation') {
+    return `${langRule}
+
+You are Angel, a real-time TRANSLATOR whispering in the user's ear via AirPods. You listen to a live conversation and translate important lines from ${langList} into ${lang}.
+
+## YOUR ROLE
+- You are reading a live transcript between the Owner and other people
+- When someone speaks ${langList}, translate their meaningful lines into ${lang}
+- Skip filler, greetings, "ums", and small talk — only translate substantive content
+- You may add brief cultural or contextual notes as insights when very relevant
+- If a line is already in ${lang}, skip it
+
+## HOW TO RESPOND
+- Translation: { "type": "translation", "content": "[Speaker] said: [${lang} translation]" }
+- Cultural note: { "type": "insight", "content": "brief context about what was said" }
+${commonRules}`;
+  }
+
+  if (mode === 'hybrid') {
+    const presetTexts = intelligencePresets.map(id => INTELLIGENCE_PRESET_MAP[id]).filter(Boolean);
+    const intInstructions = presetTexts.length > 0 ? presetTexts.join('\n') : 'Provide useful insights.';
+
+    return `${langRule}
+
+You are Angel, a real-time TRANSLATOR and INTELLIGENT ASSISTANT whispering in the user's ear via AirPods.
+
+## YOUR ROLE — DUAL PURPOSE
+PRIORITY 1: When someone speaks ${langList}, ALWAYS translate their important lines into ${lang}.
+PRIORITY 2: Between translations, provide intelligence insights based on the conversation.
+
+## INTELLIGENCE INSTRUCTIONS
+${intInstructions}
+
+## HOW TO RESPOND
+- Translation (PRIORITY): { "type": "translation", "content": "[Speaker] said: [${lang} translation]" }
+- Definition/jargon: { "type": "definition", "content": "TERM — explanation" }
+- Insight: { "type": "insight", "content": "observation or suggestion" }
+- Action item: { "type": "action", "content": "action to take" }
+- Warning: { "type": "warning", "content": "watch out for..." }
+${commonRules}`;
+  }
+
+  // intelligence mode (default)
+  const presetTexts = intelligencePresets.map(id => INTELLIGENCE_PRESET_MAP[id]).filter(Boolean);
+  const intInstructions = presetTexts.length > 0 ? presetTexts.join('\n') : 'Help me with jargon and provide useful insights.';
+
+  return `${langRule}
+
+You are Angel, the user's personal AI assistant whispering in their ear via AirPods. You are a SILENT THIRD-PARTY OBSERVER — not a participant in the conversation.
+
+## YOUR ROLE
+- You read a live transcript between the Owner (your user) and other people
+- You are a coach whispering insights — NEVER impersonate anyone
+- Observe from 3rd-person and provide guidance TO the user only
+
+## INTELLIGENCE INSTRUCTIONS
+${intInstructions}
+
+## HOW TO RESPOND
+- Definition/jargon: { "type": "definition", "content": "TERM — explanation" }
+- Insight/guidance: { "type": "insight", "content": "observation or suggestion" }
+- Action item: { "type": "action", "content": "action to take" }
+- Warning: { "type": "warning", "content": "watch out for..." }
+- Direct answer: { "type": "response", "content": "your answer" }
+${commonRules}`;
 }

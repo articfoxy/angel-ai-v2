@@ -53,15 +53,32 @@ const SESSION_EVENTS = [
   'realtime:status',
 ] as const;
 
-const ANGEL_INSTRUCTION_PRESETS = [
-  { id: 'jargon', label: 'Explain jargon & acronyms', icon: '📖' },
-  { id: 'translate_zh', label: 'Translate Chinese → English', icon: '🇨🇳' },
-  { id: 'translate_es', label: 'Translate Spanish → English', icon: '🇪🇸' },
-  { id: 'meeting', label: 'Track action items & decisions', icon: '📋' },
-  { id: 'coach', label: 'Coach my communication', icon: '🎯' },
-  { id: 'fact_check', label: 'Flag inaccuracies', icon: '⚠️' },
-  { id: 'sales', label: 'Help me close the deal', icon: '💰' },
-  { id: 'learn', label: 'Help me learn & remember', icon: '🧠' },
+type AngelMode = 'translation' | 'intelligence' | 'hybrid';
+
+const ANGEL_MODES: { id: AngelMode; label: string; icon: string; desc: string }[] = [
+  { id: 'translation', label: 'Translation', icon: 'language-outline', desc: 'Smart live translation' },
+  { id: 'intelligence', label: 'Intelligence', icon: 'bulb-outline', desc: 'Insights & coaching' },
+  { id: 'hybrid', label: 'Hybrid', icon: 'git-merge-outline', desc: 'Translate + insights' },
+];
+
+const TRANSLATE_LANGUAGES = [
+  { id: 'Chinese', flag: '🇨🇳' },
+  { id: 'Spanish', flag: '🇪🇸' },
+  { id: 'Japanese', flag: '🇯🇵' },
+  { id: 'Korean', flag: '🇰🇷' },
+  { id: 'French', flag: '🇫🇷' },
+  { id: 'German', flag: '🇩🇪' },
+  { id: 'Malay', flag: '🇲🇾' },
+  { id: 'Hindi', flag: '🇮🇳' },
+];
+
+const INTELLIGENCE_PRESETS = [
+  { id: 'jargon', label: 'Explain jargon', icon: '📖' },
+  { id: 'meeting', label: 'Track action items', icon: '📋' },
+  { id: 'coach', label: 'Coach me', icon: '🎯' },
+  { id: 'fact_check', label: 'Fact-check', icon: '⚠️' },
+  { id: 'sales', label: 'Sales help', icon: '💰' },
+  { id: 'learn', label: 'Help me learn', icon: '🧠' },
 ];
 
 export function StartScreen() {
@@ -79,7 +96,9 @@ export function StartScreen() {
   const [gain, setGainState] = useState(getGain());
   const [showGain, setShowGain] = useState(false);
   const [angelThinking, setAngelThinking] = useState(false);
-  const [activePresets, setActivePresets] = useState<string[]>([]);
+  const [angelMode, setAngelMode] = useState<AngelMode>('intelligence');
+  const [translateLangs, setTranslateLangs] = useState<string[]>(['Chinese']);
+  const [intelligencePresets, setIntelligencePresets] = useState<string[]>(['jargon']);
   const [customInstructions, setCustomInstructions] = useState('');
   const [liveDirective, setLiveDirective] = useState('');
   const [instructionsFocused, setInstructionsFocused] = useState(false);
@@ -324,28 +343,42 @@ export function StartScreen() {
     };
   }, [cleanupSessionListeners]);
 
-  // Load instruction presets + custom instructions from SecureStore
+  // Load mode settings from SecureStore
   useEffect(() => {
     (async () => {
       try {
-        const savedPresets = await SecureStore.getItemAsync('angel_v2_instruction_presets');
-        if (savedPresets) {
-          const parsed = JSON.parse(savedPresets);
-          if (Array.isArray(parsed)) setActivePresets(parsed);
-        }
+        const savedMode = await SecureStore.getItemAsync('angel_v2_mode');
+        if (savedMode === 'translation' || savedMode === 'intelligence' || savedMode === 'hybrid') setAngelMode(savedMode);
+        const savedLangs = await SecureStore.getItemAsync('angel_v2_translate_languages');
+        if (savedLangs) { const p = JSON.parse(savedLangs); if (Array.isArray(p)) setTranslateLangs(p); }
+        const savedPresets = await SecureStore.getItemAsync('angel_v2_intelligence_presets');
+        if (savedPresets) { const p = JSON.parse(savedPresets); if (Array.isArray(p)) setIntelligencePresets(p); }
         const savedCustom = await SecureStore.getItemAsync('angel_v2_custom_instructions');
         if (savedCustom) setCustomInstructions(savedCustom);
       } catch {}
     })();
   }, []);
 
-  const togglePreset = useCallback(async (presetId: string) => {
+  const selectMode = useCallback((mode: AngelMode) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setActivePresets((prev) => {
-      const updated = prev.includes(presetId)
-        ? prev.filter((p) => p !== presetId)
-        : [...prev, presetId];
-      SecureStore.setItemAsync('angel_v2_instruction_presets', JSON.stringify(updated));
+    setAngelMode(mode);
+    SecureStore.setItemAsync('angel_v2_mode', mode);
+  }, []);
+
+  const toggleTranslateLang = useCallback((lang: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setTranslateLangs((prev) => {
+      const updated = prev.includes(lang) ? prev.filter((l) => l !== lang) : [...prev, lang];
+      SecureStore.setItemAsync('angel_v2_translate_languages', JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
+
+  const toggleIntelligencePreset = useCallback((presetId: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setIntelligencePresets((prev) => {
+      const updated = prev.includes(presetId) ? prev.filter((p) => p !== presetId) : [...prev, presetId];
+      SecureStore.setItemAsync('angel_v2_intelligence_presets', JSON.stringify(updated));
       return updated;
     });
   }, []);
@@ -487,36 +520,17 @@ export function StartScreen() {
         if (speechLocale && speechLocale !== 'en') speech.speechLocale = speechLocale;
         if (Object.keys(speech).length > 0) startPayload.speech = speech;
 
-        // Load Angel Instructions (presets + custom) — wrapped in try/catch
-        // so corrupted data can't prevent session start
+        // Load Angel mode + settings
         try {
-          const presetsRaw = await SecureStore.getItemAsync('angel_v2_instruction_presets');
-          const customInstructions = await SecureStore.getItemAsync('angel_v2_custom_instructions');
-          const PRESET_MAP: Record<string, string> = {
-            jargon: 'Explain any jargon, acronyms, or technical terms used in the conversation.',
-            translate_zh: 'When someone speaks Chinese (Mandarin/Cantonese), translate it to English for me.',
-            translate_es: 'When someone speaks Spanish, translate it to English for me.',
-            meeting: 'Track action items, decisions, and key takeaways from the conversation.',
-            coach: 'Give me tips on my communication — tone, clarity, persuasiveness.',
-            fact_check: 'Flag any inaccuracies, contradictions, or questionable claims.',
-            sales: 'Help me navigate the sales conversation — objection handling, closing techniques, value framing.',
-            learn: 'Help me learn from the conversation — summarize key points, explain concepts, suggest follow-ups.',
-          };
-          const parsed = presetsRaw ? JSON.parse(presetsRaw) : [];
-          const presetIds: string[] = Array.isArray(parsed) ? parsed : [];
-          const presetTexts = presetIds.map(id => PRESET_MAP[id]).filter(Boolean);
-          const allInstructions = [...presetTexts, customInstructions?.trim()].filter(Boolean).join('\n');
-          if (allInstructions) {
-            startPayload.instructions = allInstructions;
-          }
-          // Load owner language preference
+          startPayload.mode = angelMode;
+          startPayload.translateLanguages = translateLangs;
+          startPayload.intelligencePresets = intelligencePresets;
+          const savedCustom = await SecureStore.getItemAsync('angel_v2_custom_instructions');
+          if (savedCustom?.trim()) startPayload.customInstructions = savedCustom.trim();
           const ownerLang = await SecureStore.getItemAsync('angel_v2_owner_language');
-          if (ownerLang) {
-            startPayload.ownerLanguage = ownerLang;
-          }
+          if (ownerLang) startPayload.ownerLanguage = ownerLang;
         } catch (instrErr) {
           console.warn('[session] Failed to load Angel instructions:', instrErr);
-          // Non-fatal — session starts with default instructions
         }
 
         // Load TTS voice preference (outside instruction try/catch so it always loads)
@@ -750,32 +764,73 @@ export function StartScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* Angel Instructions */}
+          {/* Angel Mode Selector */}
           <View style={styles.instructionSection}>
-            <Text style={styles.sectionTitle}>What should Angel help with?</Text>
-            <View style={styles.presetGrid}>
-              {ANGEL_INSTRUCTION_PRESETS.map((preset) => (
+            <Text style={styles.sectionTitle}>Angel Mode</Text>
+            <View style={styles.modeRow}>
+              {ANGEL_MODES.map((m) => (
                 <TouchableOpacity
-                  key={preset.id}
-                  style={[
-                    styles.presetChip,
-                    activePresets.includes(preset.id) && styles.presetChipActive,
-                  ]}
-                  onPress={() => togglePreset(preset.id)}
+                  key={m.id}
+                  style={[styles.modeCard, angelMode === m.id && styles.modeCardActive]}
+                  onPress={() => selectMode(m.id)}
+                  activeOpacity={0.7}
                 >
-                  <Text style={styles.presetIcon}>{preset.icon}</Text>
-                  <Text
-                    style={[
-                      styles.presetLabel,
-                      activePresets.includes(preset.id) && styles.presetLabelActive,
-                    ]}
-                    numberOfLines={1}
-                  >
-                    {preset.label}
+                  <Ionicons
+                    name={m.icon as any}
+                    size={20}
+                    color={angelMode === m.id ? colors.primary : colors.textSecondary}
+                  />
+                  <Text style={[styles.modeLabel, angelMode === m.id && styles.modeLabelActive]}>
+                    {m.label}
                   </Text>
+                  <Text style={styles.modeDesc} numberOfLines={1}>{m.desc}</Text>
                 </TouchableOpacity>
               ))}
             </View>
+
+            {/* Mode-specific options */}
+            {(angelMode === 'translation' || angelMode === 'hybrid') && (
+              <View style={styles.modeOptions}>
+                <Text style={styles.optionLabel}>Translate from:</Text>
+                <View style={styles.presetGrid}>
+                  {TRANSLATE_LANGUAGES.map((lang) => (
+                    <TouchableOpacity
+                      key={lang.id}
+                      style={[styles.presetChip, translateLangs.includes(lang.id) && styles.presetChipActive]}
+                      onPress={() => toggleTranslateLang(lang.id)}
+                    >
+                      <Text style={styles.presetIcon}>{lang.flag}</Text>
+                      <Text style={[styles.presetLabel, translateLangs.includes(lang.id) && styles.presetLabelActive]} numberOfLines={1}>
+                        {lang.id}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            )}
+
+            {(angelMode === 'intelligence' || angelMode === 'hybrid') && (
+              <View style={styles.modeOptions}>
+                <Text style={styles.optionLabel}>
+                  {angelMode === 'hybrid' ? 'Also help with:' : 'Help with:'}
+                </Text>
+                <View style={styles.presetGrid}>
+                  {INTELLIGENCE_PRESETS.map((preset) => (
+                    <TouchableOpacity
+                      key={preset.id}
+                      style={[styles.presetChip, intelligencePresets.includes(preset.id) && styles.presetChipActive]}
+                      onPress={() => toggleIntelligencePreset(preset.id)}
+                    >
+                      <Text style={styles.presetIcon}>{preset.icon}</Text>
+                      <Text style={[styles.presetLabel, intelligencePresets.includes(preset.id) && styles.presetLabelActive]} numberOfLines={1}>
+                        {preset.label}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            )}
+
             <TextInput
               style={[styles.customInput, instructionsFocused && styles.inputFocused]}
               value={customInstructions}
@@ -995,6 +1050,47 @@ const styles = StyleSheet.create({
   instructionSection: {
     paddingHorizontal: spacing.lg,
     marginBottom: spacing.lg,
+  },
+  modeRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  modeCard: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: spacing.xs,
+  },
+  modeCardActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryMuted,
+  },
+  modeLabel: {
+    color: colors.textSecondary,
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+  },
+  modeLabelActive: {
+    color: colors.primary,
+  },
+  modeDesc: {
+    color: colors.textTertiary,
+    fontSize: fontSize.xs,
+    textAlign: 'center',
+  },
+  modeOptions: {
+    marginTop: spacing.md,
+  },
+  optionLabel: {
+    color: colors.textSecondary,
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    marginBottom: spacing.sm,
   },
   presetGrid: {
     flexDirection: 'row',
