@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import OpenAI from 'openai';
 import { prisma } from '../../index';
 import { RetrievalService } from './retrieval.service';
@@ -180,7 +181,7 @@ Return valid JSON only.`,
           await prisma.$executeRawUnsafe(
             `INSERT INTO "Memory" (id, "userId", content, embedding, importance, category, source, "validFrom", "createdAt", "accessCount")
              VALUES ($1, $2, $3, $4::vector, $5, $6, $7, NOW(), NOW(), 0)`,
-            crypto.randomUUID(),
+            randomUUID(),
             userId,
             fact.content,
             vectorStr,
@@ -294,8 +295,12 @@ Return valid JSON only.`,
   private async updateCoreMemory(userId: string, updates: Record<string, string>) {
     if (!updates || Object.keys(updates).length === 0) return;
 
-    const core = await prisma.coreMemory.findUnique({ where: { userId } });
-    if (!core) return;
+    // Upsert CoreMemory — create if it doesn't exist (new users)
+    const core = await prisma.coreMemory.upsert({
+      where: { userId },
+      create: { userId },
+      update: {},
+    });
 
     const data: Record<string, string> = {};
     for (const [field, value] of Object.entries(updates)) {

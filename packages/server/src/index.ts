@@ -151,18 +151,18 @@ async function initDatabase() {
   try {
     await prisma.$executeRawUnsafe('CREATE EXTENSION IF NOT EXISTS vector');
     console.log('[db] pgvector extension enabled');
-    // Create vector indices (IF NOT EXISTS is safe to run repeatedly)
+    // Create HNSW vector indices (works on empty tables, unlike IVFFlat)
     await prisma.$executeRawUnsafe(`
       CREATE INDEX IF NOT EXISTS idx_memory_embedding
-      ON "Memory" USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)
+      ON "Memory" USING hnsw (embedding vector_cosine_ops)
     `);
     await prisma.$executeRawUnsafe(`
       CREATE INDEX IF NOT EXISTS idx_entity_embedding
-      ON "Entity" USING ivfflat (embedding vector_cosine_ops) WITH (lists = 50)
+      ON "Entity" USING hnsw (embedding vector_cosine_ops)
     `);
     await prisma.$executeRawUnsafe(`
       CREATE INDEX IF NOT EXISTS idx_reflection_embedding
-      ON "Reflection" USING ivfflat (embedding vector_cosine_ops) WITH (lists = 50)
+      ON "Reflection" USING hnsw (embedding vector_cosine_ops)
     `);
     console.log('[db] Vector indices ready');
   } catch (err: any) {

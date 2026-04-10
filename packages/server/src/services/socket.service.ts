@@ -54,6 +54,7 @@ export function setupSocketHandlers(io: Server) {
     let ttsEchoTimer: ReturnType<typeof setTimeout> | null = null; // Safety timeout for echo gate
     let testTimer: ReturnType<typeof setTimeout> | null = null;
     let liveDirectives: string[] = [];
+    let sessionOpenaiKey = ''; // Captured at session:start for memory/embedding ops
     let transcriptsSinceMemoryRefresh = 0;
     const MEMORY_REFRESH_INTERVAL = 10; // Refresh memory context every N final transcripts
 
@@ -66,14 +67,14 @@ export function setupSocketHandlers(io: Server) {
 
     function resetIdleTimer() {
       if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => {
+      idleTimer = setTimeout(async () => {
         console.log(`Session ${currentSessionId} idle timeout (${IDLE_TIMEOUT_MS / 1000}s with no transcript)`);
         socket.emit('session:timeout', {
           sessionId: currentSessionId,
           reason: 'idle',
           message: 'Session timed out due to inactivity',
         });
-        cleanupSession();
+        await cleanupSession();
       }, IDLE_TIMEOUT_MS);
     }
 
@@ -106,9 +107,13 @@ export function setupSocketHandlers(io: Server) {
           // Generate embedding async so the memory is retrievable via vector search
           (async () => {
             try {
-              const retrieval = new RetrievalService();
+              const retrieval = new RetrievalService(sessionOpenaiKey);
               const embedding = await retrieval.getEmbedding(memContent);
-              await prisma.$executeRaw`UPDATE "Memory" SET embedding = ${JSON.stringify(embedding)}::vector WHERE id = ${mem.id}`;
+              const vectorStr = `[${embedding.join(',')}]`;
+              await prisma.$executeRawUnsafe(
+                `UPDATE "Memory" SET embedding = $1::vector WHERE id = $2`,
+                vectorStr, mem.id
+              );
               console.log(`[agent] Embedding saved for memory ${mem.id}`);
             } catch (embErr) {
               console.warn('[agent] Embedding generation skipped:', (embErr as any)?.message?.slice(0, 60));
@@ -233,6 +238,7 @@ export function setupSocketHandlers(io: Server) {
       const openaiKey = payload.byok?.provider === 'openai' && payload.byok?.apiKey
         ? payload.byok.apiKey
         : process.env.OPENAI_API_KEY || '';
+      sessionOpenaiKey = openaiKey; // Capture for memory/embedding operations
 
       const ownerLanguage = ALLOWED_OWNER_LANGUAGES.includes(payload.ownerLanguage as string)
         ? (payload.ownerLanguage as string)
@@ -245,7 +251,8 @@ export function setupSocketHandlers(io: Server) {
         let memoryContext = '';
         try {
           const retrieval = new RetrievalService(openaiKey);
-          memoryContext = await retrieval.buildContext(userId, '', 2000);
+          // Use instructions as initial query — gives semantically relevant memories
+          memoryContext = await retrieval.buildContext(userId, userInstructions, 2000);
           console.log(`[session] Memory context: ${memoryContext.length} chars`);
         } catch (memErr) {
           console.warn('[session] Memory retrieval skipped:', (memErr as any)?.message?.slice(0, 80));
@@ -370,7 +377,7 @@ export function setupSocketHandlers(io: Server) {
               // Async — don't block transcript flow
               (async () => {
                 try {
-                  const retrieval = new RetrievalService();
+                  const retrieval = new RetrievalService(sessionOpenaiKey);
                   const freshMemory = await retrieval.buildContext(uid, recentText, 2000);
                   if (realtime && freshMemory.length > 50) {
                     const baseInstructions = realtime.instructions.split('\n## WHAT YOU REMEMBER')[0];
@@ -765,12 +772,18 @@ export function setupSocketHandlers(io: Server) {
           runPostSessionReflection(userId).catch((err) => {
             console.error('Post-session reflection/maintenance error:', err);
           });
-        }).catch((err) => {
+        }).catch(async (err) => {
           console.error('Post-session extraction error:', err);
-          // Still emit debrief on error so the client knows the session ended
+          // Update session status even on failure (prevent permanent "processing" state)
+          try {
+            await prisma.session.update({
+              where: { id: sessionId },
+              data: { status: 'ended', summary: { error: 'Extraction failed' } },
+            });
+          } catch {}
           socket.emit('session:debrief', {
             sessionId,
-            summary: 'Session ended but extraction encountered an error',
+            summary: 'Session ended',
             error: true,
             completedAt: new Date().toISOString(),
           });
