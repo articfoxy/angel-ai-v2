@@ -18,6 +18,7 @@ interface TTSCallbacks {
 interface CartesiaTTSConfig extends TTSCallbacks {
   apiKey: string;
   voiceId: string;
+  language?: string; // Cartesia language code (default: 'en')
 }
 
 const CARTESIA_WS_BASE = 'wss://api.cartesia.ai/tts/websocket';
@@ -36,6 +37,7 @@ export class CartesiaTTSService {
   private chunkIndex = 0;
   private voiceId: string;
   private apiKey: string;
+  private language: string;
   private callbacks: TTSCallbacks;
   private reconnectAttempts = 0;
   private intentionallyClosed = false;
@@ -43,6 +45,7 @@ export class CartesiaTTSService {
   constructor(config: CartesiaTTSConfig) {
     this.apiKey = config.apiKey;
     this.voiceId = config.voiceId;
+    this.language = config.language || 'en';
     this.callbacks = {
       onAudioChunk: config.onAudioChunk,
       onStart: config.onStart,
@@ -167,7 +170,7 @@ export class CartesiaTTSService {
         sample_rate: 24000,
       },
       context_id: contextId,
-      language: 'en',
+      language: this.language,
     };
 
     this.send(message);

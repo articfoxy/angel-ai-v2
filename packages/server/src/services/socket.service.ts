@@ -234,11 +234,12 @@ export function setupSocketHandlers(io: Server) {
         ? payload.byok.apiKey
         : process.env.OPENAI_API_KEY || '';
 
+      const ownerLanguage = ALLOWED_OWNER_LANGUAGES.includes(payload.ownerLanguage as string)
+        ? (payload.ownerLanguage as string)
+        : 'English';
+
       if (openaiKey) {
         const userInstructions = payload.instructions || 'Help me with jargon and provide useful insights.';
-        const ownerLanguage = ALLOWED_OWNER_LANGUAGES.includes(payload.ownerLanguage as string)
-          ? (payload.ownerLanguage as string)
-          : 'English';
 
         // Retrieve user memories for context injection
         let memoryContext = '';
@@ -282,10 +283,17 @@ export function setupSocketHandlers(io: Server) {
       }
 
       // Initialize Cartesia TTS for voice output (whispers spoken aloud via AirPods)
+      // Map owner language name to Cartesia language code
+      const LANG_TO_TTS: Record<string, string> = {
+        English: 'en', Chinese: 'zh', Malay: 'ms', Spanish: 'es',
+        French: 'fr', Japanese: 'ja', Korean: 'ko', Hindi: 'hi',
+      };
+      const ttsLang = LANG_TO_TTS[ownerLanguage] || 'en';
       if (CARTESIA_API_KEY) {
         tts = new CartesiaTTSService({
           apiKey: CARTESIA_API_KEY,
           voiceId: payload.voiceId || DEFAULT_VOICE_ID,
+          language: ttsLang,
           onAudioChunk: (data) => {
             socket.emit('tts:chunk', data);
           },

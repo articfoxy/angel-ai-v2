@@ -197,6 +197,16 @@ export class RealtimeService {
 
     // Auto-trigger response after threshold
     if (this.linesSinceLastResponse >= TRANSCRIPT_TRIGGER_THRESHOLD && !this.responseInProgress) {
+      // Inject language reminder right before the AI responds — this is the
+      // last thing the model sees before generating, so it's the strongest signal
+      this.send({
+        type: 'conversation.item.create',
+        item: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: `[RULE: Write your JSON "content" in ${this.ownerLanguage} ONLY. Not Chinese, not Spanish — ${this.ownerLanguage}.]` }],
+        },
+      });
       console.log(`[Realtime] Triggering auto-response after ${this.linesSinceLastResponse} lines`);
       this.requestResponse();
     }
@@ -217,7 +227,7 @@ export class RealtimeService {
       type: 'response.create',
       response: {
         modalities: ['text'],
-        instructions: `CRITICAL: Your JSON "content" field MUST be written in ${this.ownerLanguage}. No exceptions — even if the conversation is in another language. Analyze the recent transcript. Respond with a JSON whisper if you have something useful. Return {"skip":true} if nothing to add. ALWAYS respond with valid JSON only.`,
+        instructions: `⚠️ LANGUAGE RULE: Write your "content" value in ${this.ownerLanguage} ONLY. Even if people spoke Chinese/Spanish/other languages — your output MUST be ${this.ownerLanguage}. Analyze the recent transcript. Respond with a JSON whisper if useful, or {"skip":true}. Valid JSON only. Remember: content in ${this.ownerLanguage}.`,
       },
     });
   }
@@ -248,7 +258,7 @@ export class RealtimeService {
       type: 'response.create',
       response: {
         modalities: ['text'],
-        instructions: `CRITICAL: Your JSON "content" field MUST be written in ${this.ownerLanguage}. No exceptions — even if the conversation is in another language. The user just activated you. Analyze ALL recent transcript and provide a helpful response. You MUST respond with something useful — do NOT skip. Return valid JSON only.`,
+        instructions: `⚠️ LANGUAGE RULE: Write your "content" value in ${this.ownerLanguage} ONLY. Even if people spoke Chinese/Spanish/other languages — your output MUST be ${this.ownerLanguage}. The user activated you. Analyze ALL recent transcript and provide a helpful response. Do NOT skip. Valid JSON only. Remember: content in ${this.ownerLanguage}.`,
       },
     });
   }
