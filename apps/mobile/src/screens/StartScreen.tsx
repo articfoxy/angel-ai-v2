@@ -656,7 +656,7 @@ export function StartScreen() {
               onChangeText={setLiveDirective}
               onFocus={() => setDirectiveFocused(true)}
               onBlur={() => setDirectiveFocused(false)}
-              placeholder="Instruct Angel live..."
+              placeholder="Angel command..."
               placeholderTextColor={colors.textTertiary}
               returnKeyType="send"
               onSubmitEditing={sendLiveDirective}

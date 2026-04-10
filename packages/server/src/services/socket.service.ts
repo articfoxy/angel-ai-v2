@@ -116,8 +116,8 @@ export function setupSocketHandlers(io: Server) {
           })();
         } catch (memErr) {
           console.error('[agent] Failed to save memory:', memErr);
-          whisper.content = 'Failed to save to memory. I\'ll try again next time.';
-          whisper.type = 'warning';
+          // Silently fail — don't interrupt the user with a memory error whisper
+          return;
         }
       }
 
