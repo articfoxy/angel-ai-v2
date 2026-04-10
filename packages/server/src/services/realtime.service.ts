@@ -21,6 +21,7 @@ interface RealtimeWhisper {
 interface RealtimeConfig {
   apiKey: string;
   instructions: string;
+  ownerLanguage?: string;
   onWhisper: (whisper: RealtimeWhisper) => void;
   onError?: (error: string) => void;
   onStatus?: (status: 'connected' | 'reconnecting' | 'disconnected' | 'error') => void;
@@ -46,9 +47,11 @@ export class RealtimeService {
   private currentResponseText = '';
   private responseTimeout: ReturnType<typeof setTimeout> | null = null;
   private sessionConfigured = false;
+  private ownerLanguage = 'English';
 
   constructor(config: RealtimeConfig) {
     this.config = config;
+    this.ownerLanguage = config.ownerLanguage || 'English';
   }
 
   /** Whether the Realtime session is connected and configured */
@@ -214,7 +217,7 @@ export class RealtimeService {
       type: 'response.create',
       response: {
         modalities: ['text'],
-        instructions: 'Analyze the recent transcript. Respond with a JSON whisper if you have something useful. Return {"skip":true} if nothing to add. ALWAYS respond with valid JSON only.',
+        instructions: `CRITICAL: Your JSON "content" field MUST be written in ${this.ownerLanguage}. No exceptions — even if the conversation is in another language. Analyze the recent transcript. Respond with a JSON whisper if you have something useful. Return {"skip":true} if nothing to add. ALWAYS respond with valid JSON only.`,
       },
     });
   }
@@ -245,7 +248,7 @@ export class RealtimeService {
       type: 'response.create',
       response: {
         modalities: ['text'],
-        instructions: 'The user just activated you. Analyze ALL recent transcript and provide a helpful response. You MUST respond with something useful — do NOT skip. Return valid JSON only.',
+        instructions: `CRITICAL: Your JSON "content" field MUST be written in ${this.ownerLanguage}. No exceptions — even if the conversation is in another language. The user just activated you. Analyze ALL recent transcript and provide a helpful response. You MUST respond with something useful — do NOT skip. Return valid JSON only.`,
       },
     });
   }

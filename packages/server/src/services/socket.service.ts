@@ -253,6 +253,7 @@ export function setupSocketHandlers(io: Server) {
         console.log(`[session] Owner language: ${ownerLanguage}, Instructions length: ${userInstructions.length}`);
         realtime = new RealtimeService({
           apiKey: openaiKey,
+          ownerLanguage,
           instructions: buildAngelInstructions(userInstructions, ownerLanguage, memoryContext),
           onWhisper: (whisper) => {
             handleRealtimeWhisper(userId, whisper).catch((err) => {
