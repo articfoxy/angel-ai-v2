@@ -604,6 +604,12 @@ export function setupSocketHandlers(io: Server) {
       if (ttsEchoTimer) { clearTimeout(ttsEchoTimer); ttsEchoTimer = null; }
     });
 
+    socket.on('tts:speed', (data: { speed: string }) => {
+      if (tts && (data.speed === 'normal' || data.speed === 'fast' || data.speed === 'fastest')) {
+        tts.setSpeed(data.speed);
+      }
+    });
+
     // ── Test conversation mode ──
     socket.on('session:test', (data?: { type?: string }) => {
       if (!currentSessionId || !realtime) {
@@ -686,45 +692,71 @@ export function setupSocketHandlers(io: Server) {
       const SCRIPT = test.script;
 
       let idx = 0;
-      let cumDelay = 0;
 
-      const emitNext = () => {
-        if (idx >= SCRIPT.length || !currentSessionId) {
-          testTimer = null;
+      // Stream a single line word-by-word (interim transcripts) then final
+      const streamLine = (segIdx: number, onDone: () => void) => {
+        const seg = SCRIPT[segIdx];
+        const sp = SPEAKERS[seg.speaker];
+        const interimId = `test-interim-${segIdx}`;
+        const finalId = `test-final-${segIdx}`;
+
+        // For Chinese test: split into chunks (Chinese characters ~3 per chunk)
+        // For other tests: just emit final immediately
+        const isStreaming = testType === 'chinese';
+        if (!isStreaming) {
+          socket.emit('transcript', { id: finalId, speaker: sp.id, speakerLabel: sp.label, text: seg.text, isFinal: true, timestamp: Date.now() });
+          transcriptBuffer.push(`[${sp.label}]: ${seg.text.slice(0, 500)}`);
+          if (transcriptBuffer.length > 60) transcriptBuffer = transcriptBuffer.slice(-40);
+          if (realtime) realtime.feedTranscript(`[${sp.label}]: ${seg.text}`);
+          resetIdleTimer();
+          onDone();
           return;
         }
-        const seg = SCRIPT[idx];
-        const sp = SPEAKERS[seg.speaker];
-        const id = `test-final-${idx}`;
 
-        // Emit transcript to client
-        socket.emit('transcript', {
-          id,
-          speaker: sp.id,
-          speakerLabel: sp.label,
-          text: seg.text,
-          isFinal: true,
-          timestamp: Date.now(),
+        // Word-by-word streaming for Chinese test
+        const words = seg.text.split(/(?<=[\u4e00-\u9fff\u3400-\u4dbf])|(\s+)/).filter(Boolean);
+        // Group into chunks of ~4 characters for natural pacing
+        const chunks: string[] = [];
+        let current = '';
+        for (const w of words) {
+          current += w;
+          if (current.length >= 4) {
+            chunks.push(current);
+            current = '';
+          }
+        }
+        if (current) chunks.push(current);
+
+        let ci = 0;
+        const streamNext = () => {
+          if (!currentSessionId) return;
+          ci++;
+          const partial = chunks.slice(0, ci).join('');
+          if (ci < chunks.length) {
+            // Interim — words appearing one by one
+            socket.emit('transcript', { id: interimId, speaker: sp.id, speakerLabel: sp.label, text: partial, isFinal: false, timestamp: Date.now() });
+            testTimer = setTimeout(streamNext, 200 + Math.random() * 150); // 200-350ms per chunk
+          } else {
+            // Final — full sentence
+            socket.emit('transcript', { id: finalId, speaker: sp.id, speakerLabel: sp.label, text: seg.text, isFinal: true, timestamp: Date.now() });
+            transcriptBuffer.push(`[${sp.label}]: ${seg.text.slice(0, 500)}`);
+            if (transcriptBuffer.length > 60) transcriptBuffer = transcriptBuffer.slice(-40);
+            if (realtime) realtime.feedTranscript(`[${sp.label}]: ${seg.text}`);
+            resetIdleTimer();
+            onDone();
+          }
+        };
+        streamNext();
+      };
+
+      const emitNext = () => {
+        if (idx >= SCRIPT.length || !currentSessionId) { testTimer = null; return; }
+        streamLine(idx, () => {
+          idx++;
+          if (idx < SCRIPT.length) {
+            testTimer = setTimeout(emitNext, SCRIPT[idx].delay);
+          }
         });
-
-        // Buffer transcript (same as normal flow)
-        transcriptBuffer.push(`[${sp.label}]: ${seg.text.slice(0, 500)}`);
-        if (transcriptBuffer.length > 60) {
-          transcriptBuffer = transcriptBuffer.slice(-40);
-        }
-
-        // Feed to Realtime AI — no echo gate for test mode (no mic = no echo)
-        if (realtime) {
-          realtime.feedTranscript(`[${sp.label}]: ${seg.text}`);
-        }
-
-        // Reset idle timer
-        resetIdleTimer();
-
-        idx++;
-        if (idx < SCRIPT.length) {
-          testTimer = setTimeout(emitNext, SCRIPT[idx].delay);
-        }
       };
 
       testTimer = setTimeout(emitNext, SCRIPT[0].delay);

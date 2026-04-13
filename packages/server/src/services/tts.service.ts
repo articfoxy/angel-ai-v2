@@ -38,9 +38,11 @@ export class CartesiaTTSService {
   private voiceId: string;
   private apiKey: string;
   private language: string;
+  private speed: 'normal' | 'fast' | 'fastest' = 'normal';
   private callbacks: TTSCallbacks;
   private reconnectAttempts = 0;
   private intentionallyClosed = false;
+  private queue: { whisperId: string; text: string }[] = [];
 
   constructor(config: CartesiaTTSConfig) {
     this.apiKey = config.apiKey;
@@ -130,37 +132,39 @@ export class CartesiaTTSService {
   }
 
   /**
-   * Convert text to speech and stream audio chunks back via callbacks.
-   *
-   * If a previous speak() call is still streaming, it is cancelled first
-   * so only the latest whisper is heard.
+   * Queue text for speech. If nothing is playing, starts immediately.
+   * If something is playing, queues it — next item plays when current finishes.
    */
   speak(whisperId: string, text: string): void {
-    if (!text || text.trim().length < MIN_TEXT_LENGTH) {
-      return;
-    }
-
+    if (!text || text.trim().length < MIN_TEXT_LENGTH) return;
     if (!this.isConnected) {
       console.warn('[TTS] speak() called but WebSocket not connected');
-      this.callbacks.onError?.('TTS not connected');
       return;
     }
 
-    // Cancel any in-progress TTS before starting a new one
-    this.cancel();
+    if (this.currentWhisperId) {
+      // Queue it — will play after current finishes
+      this.queue.push({ whisperId, text });
+      console.log(`[TTS] Queued whisper=${whisperId} (queue size: ${this.queue.length})`);
+      return;
+    }
 
+    this.startSpeak(whisperId, text);
+  }
+
+  /** Internal: actually start speaking (no queue check). */
+  private startSpeak(whisperId: string, text: string): void {
     const contextId = uuid();
     this.currentContextId = contextId;
     this.currentWhisperId = whisperId;
     this.chunkIndex = 0;
 
-    // Estimate duration for UI progress indication
     const wordCount = text.trim().split(/\s+/).length;
     const estimatedDurationMs = wordCount * MS_PER_WORD;
 
     this.callbacks.onStart({ whisperId, estimatedDurationMs });
 
-    const message = {
+    const message: Record<string, unknown> = {
       model_id: CARTESIA_MODEL,
       transcript: text,
       voice: { mode: 'id', id: this.voiceId },
@@ -172,9 +176,27 @@ export class CartesiaTTSService {
       context_id: contextId,
       language: this.language,
     };
+    // Cartesia speed control
+    if (this.speed !== 'normal') {
+      message.speed = this.speed;
+    }
 
     this.send(message);
-    console.log(`[TTS] speak() started — whisper=${whisperId} context=${contextId} words=${wordCount}`);
+    console.log(`[TTS] speak() started — whisper=${whisperId} context=${contextId} words=${wordCount} speed=${this.speed}`);
+  }
+
+  /** Play next queued whisper if any. Called when current finishes. */
+  private playNext(): void {
+    if (this.queue.length === 0) return;
+    const next = this.queue.shift()!;
+    console.log(`[TTS] Playing next from queue: ${next.whisperId} (remaining: ${this.queue.length})`);
+    this.startSpeak(next.whisperId, next.text);
+  }
+
+  /** Set TTS speed. Applies to next speak() call. */
+  setSpeed(speed: 'normal' | 'fast' | 'fastest'): void {
+    this.speed = speed;
+    console.log(`[TTS] Speed set to ${speed}`);
   }
 
   /**
@@ -191,6 +213,7 @@ export class CartesiaTTSService {
     }
     this.currentContextId = null;
     this.currentWhisperId = null;
+    this.queue = [];
   }
 
   /**
@@ -209,6 +232,7 @@ export class CartesiaTTSService {
     this.currentContextId = null;
     this.currentWhisperId = null;
     this.connected = false;
+    this.queue = [];
 
     if (this.ws) {
       try {
@@ -258,6 +282,8 @@ export class CartesiaTTSService {
         this.callbacks.onDone({ whisperId: this.currentWhisperId });
         this.currentContextId = null;
         this.currentWhisperId = null;
+        // Play next queued whisper
+        this.playNext();
         break;
       }
 
@@ -267,6 +293,8 @@ export class CartesiaTTSService {
         this.callbacks.onError?.(errorMsg);
         this.currentContextId = null;
         this.currentWhisperId = null;
+        // Try next in queue even after error
+        this.playNext();
         break;
       }
 

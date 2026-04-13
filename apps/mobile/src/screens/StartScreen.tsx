@@ -103,6 +103,7 @@ export function StartScreen() {
   const [liveDirective, setLiveDirective] = useState('');
   const [instructionsFocused, setInstructionsFocused] = useState(false);
   const [directiveFocused, setDirectiveFocused] = useState(false);
+  const [ttsSpeed, setTtsSpeed] = useState<'normal' | 'fast' | 'fastest'>('normal');
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const testRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isStartingRef = useRef(false); // Double-tap guard for session creation
@@ -399,6 +400,13 @@ export function StartScreen() {
     }
   }, [liveDirective]);
 
+  const changeTtsSpeed = useCallback((speed: 'normal' | 'fast' | 'fastest') => {
+    setTtsSpeed(speed);
+    const sock = getSocket();
+    if (sock?.connected) sock.emit('tts:speed', { speed });
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  }, []);
+
   const handleTest = () => {
     Alert.alert('Test Conversation', 'Choose a scenario:', [
       {
@@ -683,6 +691,23 @@ export function StartScreen() {
             )}
           </View>
 
+          {/* Speed toggle for TTS */}
+          {angelMode === 'translation' && (
+            <View style={styles.speedRow}>
+              {(['normal', 'fast', 'fastest'] as const).map((s) => (
+                <TouchableOpacity
+                  key={s}
+                  style={[styles.speedChip, ttsSpeed === s && styles.speedChipActive]}
+                  onPress={() => changeTtsSpeed(s)}
+                >
+                  <Text style={[styles.speedText, ttsSpeed === s && styles.speedTextActive]}>
+                    {s === 'normal' ? '1×' : s === 'fast' ? '1.5×' : '2×'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
           {/* Bottom control bar */}
           <View style={styles.activeButtonRow}>
             {/* Gain slider toggle */}
@@ -962,6 +987,35 @@ const styles = StyleSheet.create({
   inputFocused: {
     borderColor: colors.primary,
     backgroundColor: colors.surfaceRaised,
+  },
+  speedRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  speedChip: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs + 2,
+    borderRadius: radius.full,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  speedChipActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryMuted,
+  },
+  speedText: {
+    color: colors.textSecondary,
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+  },
+  speedTextActive: {
+    color: colors.primary,
   },
   askAngelBtn: {
     flexDirection: 'row',
