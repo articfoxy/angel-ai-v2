@@ -28,6 +28,7 @@ class TTSPlayer {
   private playbackStarted = false;
   private allChunksSent = false; // true after tts:done (finishWhisper)
   private endedWhileStreaming = false; // onEnded fired before all chunks arrived
+  private speedMultiplier = 1.0; // 1.0 = normal, 1.5 = fast, 2.0 = fastest
 
   constructor(config: TTSPlayerConfig = {}) {
     this.config = config;
@@ -138,7 +139,10 @@ class TTSPlayer {
   private enqueueAudio(float32Data: Float32Array): void {
     if (!this.audioContext || !this.queueSource) return;
 
-    const buffer = this.audioContext.createBuffer(NUM_CHANNELS, float32Data.length, SAMPLE_RATE);
+    // Speed control: tell the AudioBuffer its sample rate is higher than actual.
+    // Audio is 24kHz. At 1.5x, we say it's 36kHz → plays 1.5x faster.
+    const effectiveRate = Math.round(SAMPLE_RATE * this.speedMultiplier);
+    const buffer = this.audioContext.createBuffer(NUM_CHANNELS, float32Data.length, effectiveRate);
     buffer.copyToChannel(float32Data, 0, 0);
     this.queueSource.enqueueBuffer(buffer);
   }
@@ -249,6 +253,12 @@ class TTSPlayer {
   /** Update callbacks without replacing the instance (e.g. after reconnect). */
   updateConfig(config: TTSPlayerConfig): void {
     this.config = { ...this.config, ...config };
+  }
+
+  /** Set playback speed. 1.0 = normal, 1.5 = fast, 2.0 = fastest. Applies to next enqueued chunk. */
+  setSpeed(multiplier: number): void {
+    this.speedMultiplier = multiplier;
+    console.log('[TTS] Speed set to', multiplier + 'x');
   }
 }
 

@@ -402,6 +402,11 @@ export function StartScreen() {
 
   const changeTtsSpeed = useCallback((speed: 'normal' | 'fast' | 'fastest') => {
     setTtsSpeed(speed);
+    // Client-side speed control (reliable — adjusts AudioBuffer sample rate)
+    const multiplier = speed === 'normal' ? 1.0 : speed === 'fast' ? 1.5 : 2.0;
+    const player = getTTSPlayer();
+    player.setSpeed(multiplier);
+    // Also tell server (for Cartesia-native speed if supported)
     const sock = getSocket();
     if (sock?.connected) sock.emit('tts:speed', { speed });
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
