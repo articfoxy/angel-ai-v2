@@ -660,136 +660,21 @@ export function StartScreen() {
         </View>
       )}
 
-      {isActive ? (
-        /* Active Session View */
+      {/* Unified single-screen layout */}
+      {isActive || segments.length > 0 ? (
         <View style={styles.activeContainer}>
-          {/* Live Transcript with inline whisper cards */}
           <TranscriptView
             segments={segments}
             speakerNames={speakerNames}
             whisperCards={whisperCards}
           />
-
-          {/* Live directive input */}
-          <View style={styles.directiveRow}>
-            <TextInput
-              style={[styles.directiveInput, directiveFocused && styles.inputFocused]}
-              value={liveDirective}
-              onChangeText={setLiveDirective}
-              onFocus={() => setDirectiveFocused(true)}
-              onBlur={() => setDirectiveFocused(false)}
-              placeholder="Angel command..."
-              placeholderTextColor={colors.textTertiary}
-              returnKeyType="send"
-              onSubmitEditing={sendLiveDirective}
-              blurOnSubmit={false}
-            />
-            {liveDirective.trim().length > 0 && (
-              <TouchableOpacity onPress={sendLiveDirective} style={styles.directiveSend}>
-                <Ionicons name="arrow-up-circle" size={28} color={colors.primary} />
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {/* Speed toggle for TTS */}
-          {angelMode === 'translation' && (
-            <View style={styles.speedRow}>
-              {(['normal', 'fast', 'fastest'] as const).map((s) => (
-                <TouchableOpacity
-                  key={s}
-                  style={[styles.speedChip, ttsSpeed === s && styles.speedChipActive]}
-                  onPress={() => changeTtsSpeed(s)}
-                >
-                  <Text style={[styles.speedText, ttsSpeed === s && styles.speedTextActive]}>
-                    {s === 'normal' ? '1×' : s === 'fast' ? '1.5×' : '2×'}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
-
-          {/* Bottom control bar */}
-          <View style={styles.activeButtonRow}>
-            {/* Gain slider toggle */}
-            {showGain && (
-              <View style={styles.gainRow}>
-                <Ionicons name="mic-outline" size={16} color={colors.textSecondary} />
-                <Slider
-                  style={styles.gainSlider}
-                  minimumValue={0.5}
-                  maximumValue={5.0}
-                  step={0.5}
-                  value={gain}
-                  onValueChange={(v) => {
-                    setGainState(v);
-                    setGain(v);
-                  }}
-                  minimumTrackTintColor={colors.primary}
-                  maximumTrackTintColor={colors.border}
-                  thumbTintColor={colors.primary}
-                />
-                <Text style={styles.gainLabel}>{gain.toFixed(1)}×</Text>
-              </View>
-            )}
-            <View style={styles.bottomControls}>
-              <TouchableOpacity
-                onPress={() => setShowGain(!showGain)}
-                style={[
-                  styles.gainToggle,
-                  showGain && { backgroundColor: colors.primaryMuted },
-                ]}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                <Ionicons
-                  name="volume-high-outline"
-                  size={18}
-                  color={showGain ? colors.primary : colors.textSecondary}
-                />
-                <Text style={[
-                  styles.gainToggleText,
-                  showGain && { color: colors.primary },
-                ]}>
-                  {gain.toFixed(1)}×
-                </Text>
-              </TouchableOpacity>
-              <AngelButton onPress={handleToggle} isActive={true} />
-              <TouchableOpacity
-                onPress={handleAngelActivate}
-                disabled={angelThinking}
-                style={[
-                  styles.askAngelBtn,
-                  angelThinking && { opacity: 0.5 },
-                ]}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              >
-                {angelThinking ? (
-                  <ActivityIndicator size="small" color={colors.primary} />
-                ) : (
-                  <Ionicons name="sparkles" size={18} color={colors.primary} />
-                )}
-                <Text style={styles.askAngelText}>Ask</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
         </View>
       ) : (
-        /* Idle View */
         <ScrollView
           contentContainerStyle={styles.idleContent}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
-          }
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         >
-          {/* Angel Button */}
-          <View style={styles.angelSection}>
-            <AngelButton onPress={handleToggle} isActive={false} />
-            <TouchableOpacity style={styles.testButton} onPress={handleTest}>
-              <Ionicons name="flask-outline" size={16} color={colors.primary} />
-              <Text style={styles.testButtonText}>Test with Sample Conversation</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Angel Mode Selector */}
+          {/* Mode selector */}
           <View style={styles.instructionSection}>
             <Text style={styles.sectionTitle}>Angel Mode</Text>
             <View style={styles.modeRow}>
@@ -800,78 +685,54 @@ export function StartScreen() {
                   onPress={() => selectMode(m.id)}
                   activeOpacity={0.7}
                 >
-                  <Ionicons
-                    name={m.icon as any}
-                    size={20}
-                    color={angelMode === m.id ? colors.primary : colors.textSecondary}
-                  />
-                  <Text style={[styles.modeLabel, angelMode === m.id && styles.modeLabelActive]}>
-                    {m.label}
-                  </Text>
+                  <Ionicons name={m.icon as any} size={20} color={angelMode === m.id ? colors.primary : colors.textSecondary} />
+                  <Text style={[styles.modeLabel, angelMode === m.id && styles.modeLabelActive]}>{m.label}</Text>
                   <Text style={styles.modeDesc} numberOfLines={1}>{m.desc}</Text>
                 </TouchableOpacity>
               ))}
             </View>
-
-            {/* Mode-specific options */}
             {(angelMode === 'translation' || angelMode === 'hybrid') && (
               <View style={styles.modeOptions}>
                 <Text style={styles.optionLabel}>Translate from:</Text>
                 <View style={styles.presetGrid}>
                   {TRANSLATE_LANGUAGES.map((lang) => (
-                    <TouchableOpacity
-                      key={lang.id}
-                      style={[styles.presetChip, translateLangs.includes(lang.id) && styles.presetChipActive]}
-                      onPress={() => toggleTranslateLang(lang.id)}
-                    >
+                    <TouchableOpacity key={lang.id} style={[styles.presetChip, translateLangs.includes(lang.id) && styles.presetChipActive]} onPress={() => toggleTranslateLang(lang.id)}>
                       <Text style={styles.presetIcon}>{lang.flag}</Text>
-                      <Text style={[styles.presetLabel, translateLangs.includes(lang.id) && styles.presetLabelActive]} numberOfLines={1}>
-                        {lang.id}
-                      </Text>
+                      <Text style={[styles.presetLabel, translateLangs.includes(lang.id) && styles.presetLabelActive]} numberOfLines={1}>{lang.id}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
               </View>
             )}
-
             {(angelMode === 'intelligence' || angelMode === 'hybrid') && (
               <View style={styles.modeOptions}>
-                <Text style={styles.optionLabel}>
-                  {angelMode === 'hybrid' ? 'Also help with:' : 'Help with:'}
-                </Text>
+                <Text style={styles.optionLabel}>{angelMode === 'hybrid' ? 'Also help with:' : 'Help with:'}</Text>
                 <View style={styles.presetGrid}>
                   {INTELLIGENCE_PRESETS.map((preset) => (
-                    <TouchableOpacity
-                      key={preset.id}
-                      style={[styles.presetChip, intelligencePresets.includes(preset.id) && styles.presetChipActive]}
-                      onPress={() => toggleIntelligencePreset(preset.id)}
-                    >
+                    <TouchableOpacity key={preset.id} style={[styles.presetChip, intelligencePresets.includes(preset.id) && styles.presetChipActive]} onPress={() => toggleIntelligencePreset(preset.id)}>
                       <Text style={styles.presetIcon}>{preset.icon}</Text>
-                      <Text style={[styles.presetLabel, intelligencePresets.includes(preset.id) && styles.presetLabelActive]} numberOfLines={1}>
-                        {preset.label}
-                      </Text>
+                      <Text style={[styles.presetLabel, intelligencePresets.includes(preset.id) && styles.presetLabelActive]} numberOfLines={1}>{preset.label}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
               </View>
             )}
-
             <TextInput
               style={[styles.customInput, instructionsFocused && styles.inputFocused]}
               value={customInstructions}
               onChangeText={saveCustomInstructions}
               onFocus={() => setInstructionsFocused(true)}
               onBlur={() => setInstructionsFocused(false)}
-              placeholder="Custom instructions for Angel..."
+              placeholder="Custom instructions..."
               placeholderTextColor={colors.textTertiary}
               multiline
-              numberOfLines={3}
+              numberOfLines={2}
             />
           </View>
 
-          {/* Conversation History */}
+          {/* History */}
           <View style={styles.historySection}>
-            <Text style={styles.sectionTitle}>Conversation History</Text>
+            <Text style={styles.sectionTitle}>History</Text>
             {sessionsLoading && !sessions ? (
               <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.lg }} />
             ) : Array.isArray(sessions) && sessions.length > 0 ? (
@@ -881,12 +742,8 @@ export function StartScreen() {
                   session={session}
                   onPress={() => navigation.navigate('Debrief', { sessionId: session.id })}
                   onDelete={async () => {
-                    try {
-                      await api.delete(`sessions/${session.id}`);
-                      refetchSessions();
-                    } catch (err) {
-                      console.error('Failed to delete session:', err);
-                      Alert.alert('Error', 'Failed to delete session. Please try again.');
+                    try { await api.delete(`sessions/${session.id}`); refetchSessions(); } catch (err) {
+                      Alert.alert('Error', 'Failed to delete session.');
                     }
                   }}
                 />
@@ -895,12 +752,113 @@ export function StartScreen() {
               <View style={styles.emptyState}>
                 <Ionicons name="mic-outline" size={32} color={colors.textTertiary} />
                 <Text style={styles.emptyText}>No conversations yet</Text>
-                <Text style={styles.emptySubtext}>Tap Start Session to begin</Text>
               </View>
             )}
           </View>
         </ScrollView>
       )}
+
+      {/* Angel command input (only during active session) */}
+      {isActive && (
+        <View style={styles.directiveRow}>
+          <TextInput
+            style={[styles.directiveInput, directiveFocused && styles.inputFocused]}
+            value={liveDirective}
+            onChangeText={setLiveDirective}
+            onFocus={() => setDirectiveFocused(true)}
+            onBlur={() => setDirectiveFocused(false)}
+            placeholder="Angel command..."
+            placeholderTextColor={colors.textTertiary}
+            returnKeyType="send"
+            onSubmitEditing={sendLiveDirective}
+            blurOnSubmit={false}
+          />
+          {liveDirective.trim().length > 0 && (
+            <TouchableOpacity onPress={sendLiveDirective} style={styles.directiveSend}>
+              <Ionicons name="arrow-up-circle" size={28} color={colors.primary} />
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
+      {/* Speed toggle for TTS (translation mode only) */}
+      {isActive && angelMode === 'translation' && (
+        <View style={styles.speedRow}>
+          {(['normal', 'fast', 'fastest'] as const).map((s) => (
+            <TouchableOpacity
+              key={s}
+              style={[styles.speedChip, ttsSpeed === s && styles.speedChipActive]}
+              onPress={() => changeTtsSpeed(s)}
+            >
+              <Text style={[styles.speedText, ttsSpeed === s && styles.speedTextActive]}>
+                {s === 'normal' ? '1×' : s === 'fast' ? '1.5×' : '2×'}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
+      {/* Bottom control bar */}
+      <View style={styles.activeButtonRow}>
+        {isActive && showGain && (
+          <View style={styles.gainRow}>
+            <Ionicons name="mic-outline" size={16} color={colors.textSecondary} />
+            <Slider
+              style={styles.gainSlider}
+              minimumValue={0.5}
+              maximumValue={5.0}
+              step={0.5}
+              value={gain}
+              onValueChange={(v) => { setGainState(v); setGain(v); }}
+              minimumTrackTintColor={colors.primary}
+              maximumTrackTintColor={colors.border}
+              thumbTintColor={colors.primary}
+            />
+            <Text style={styles.gainLabel}>{gain.toFixed(1)}×</Text>
+          </View>
+        )}
+        <View style={styles.bottomControls}>
+          {isActive ? (
+            <TouchableOpacity
+              onPress={() => setShowGain(!showGain)}
+              style={[styles.gainToggle, showGain && { backgroundColor: colors.primaryMuted }]}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons name="volume-high-outline" size={18} color={showGain ? colors.primary : colors.textSecondary} />
+              <Text style={[styles.gainToggleText, showGain && { color: colors.primary }]}>{gain.toFixed(1)}×</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity style={styles.testButton} onPress={handleTest}>
+              <Ionicons name="flask-outline" size={14} color={colors.primary} />
+              <Text style={styles.testButtonText}>Test</Text>
+            </TouchableOpacity>
+          )}
+          <AngelButton onPress={handleToggle} isActive={isActive} />
+          {isActive ? (
+            <TouchableOpacity
+              onPress={handleAngelActivate}
+              disabled={angelThinking}
+              style={[styles.askAngelBtn, angelThinking && { opacity: 0.5 }]}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              {angelThinking ? (
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : (
+                <Ionicons name="sparkles" size={18} color={colors.primary} />
+              )}
+              <Text style={styles.askAngelText}>Ask</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={styles.settingsBtn}
+              onPress={() => navigation.navigate('Settings' as never)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons name="settings-outline" size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
     </View>
   );
 }
@@ -1032,6 +990,12 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontSize: fontSize.xs,
     fontWeight: '700',
+  },
+  settingsBtn: {
+    width: 56,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing.xs + 2,
   },
   activeButtonRow: {
     paddingVertical: spacing.sm,

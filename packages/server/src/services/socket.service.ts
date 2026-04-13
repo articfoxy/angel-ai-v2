@@ -735,7 +735,7 @@ export function setupSocketHandlers(io: Server) {
           if (ci < chunks.length) {
             // Interim — words appearing one by one
             socket.emit('transcript', { id: interimId, speaker: sp.id, speakerLabel: sp.label, text: partial, isFinal: false, timestamp: Date.now() });
-            testTimer = setTimeout(streamNext, 200 + Math.random() * 150); // 200-350ms per chunk
+            testTimer = setTimeout(streamNext, 600 + Math.random() * 450); // 600-1050ms per chunk — mimics real speech pace
           } else {
             // Final — full sentence
             socket.emit('transcript', { id: finalId, speaker: sp.id, speakerLabel: sp.label, text: seg.text, isFinal: true, timestamp: Date.now() });
