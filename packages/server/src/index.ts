@@ -165,6 +165,15 @@ async function initDatabase() {
       ON "Reflection" USING hnsw (embedding vector_cosine_ops)
     `);
     console.log('[db] Vector indices ready');
+
+    // Clean up orphaned sessions from previous server instances/deploys
+    const cleaned = await prisma.session.updateMany({
+      where: { status: { in: ['active', 'processing'] } },
+      data: { status: 'ended', endedAt: new Date() },
+    });
+    if (cleaned.count > 0) {
+      console.log(`[db] Cleaned ${cleaned.count} orphaned sessions from previous deploy`);
+    }
   } catch (err: any) {
     // Non-fatal: pgvector may not be available on some PostgreSQL hosts
     console.warn('[db] pgvector setup skipped:', err?.message?.slice(0, 100));

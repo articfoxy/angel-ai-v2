@@ -216,6 +216,16 @@ export function setupSocketHandlers(io: Server) {
       });
       if (!session) return;
 
+      // End any stale active/processing sessions for this user (prevent orphans)
+      await prisma.session.updateMany({
+        where: {
+          userId: socket.userId,
+          id: { not: sessionId },
+          status: { in: ['active', 'processing'] },
+        },
+        data: { status: 'ended', endedAt: new Date() },
+      });
+
       // Guard: if connections already exist (e.g., rapid reconnect),
       // clean them up before creating new ones to prevent orphaned connections.
       if (deepgram || realtime || tts) {
@@ -837,7 +847,17 @@ export function setupSocketHandlers(io: Server) {
     });
 
     socket.on('disconnect', async () => {
+      const sid = currentSessionId;
       await cleanupSession();
+      // Mark any orphaned session as ended in the DB
+      if (sid && socket.userId) {
+        try {
+          await prisma.session.updateMany({
+            where: { id: sid, userId: socket.userId, status: { not: 'ended' } },
+            data: { status: 'ended', endedAt: new Date() },
+          });
+        } catch {}
+      }
       console.log(`Client disconnected: ${socket.userId}`);
     });
   });

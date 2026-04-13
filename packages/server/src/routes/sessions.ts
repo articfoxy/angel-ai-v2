@@ -43,30 +43,33 @@ sessionsRouter.get('/:id', async (req: AuthRequest, res: Response) => {
 // Create session
 sessionsRouter.post('/', async (req: AuthRequest, res: Response) => {
   try {
-    // Auto-close stale sessions: any session older than 3 hours with no endedAt
-    // is a zombie from a crash/force-quit — mark it ended so it doesn't block new ones.
+    // Auto-close ALL stale sessions: active >2hr or processing >30min
     await prisma.session.updateMany({
       where: {
         userId: req.userId!,
-        endedAt: null,
-        status: { notIn: ['ended', 'processing'] },
+        status: 'active',
         startedAt: { lt: new Date(Date.now() - 2 * 60 * 60 * 1000) },
       },
-      data: { endedAt: new Date(), status: 'ended', summary: 'Session ended (stale cleanup)' },
+      data: { endedAt: new Date(), status: 'ended', summary: { note: 'Stale cleanup' } },
     });
-
-    // Enforce concurrent session limit — prevent resource abuse
-    const activeSessions = await prisma.session.count({
+    await prisma.session.updateMany({
       where: {
         userId: req.userId!,
-        endedAt: null,
-        status: { notIn: ['ended', 'processing'] },
+        status: 'processing',
+        startedAt: { lt: new Date(Date.now() - 30 * 60 * 1000) },
       },
+      data: { endedAt: new Date(), status: 'ended', summary: { note: 'Processing timeout' } },
     });
-    if (activeSessions >= 3) {
-      res.status(429).json({ error: 'Too many active sessions. Please end an existing session first.' });
-      return;
-    }
+
+    // End ALL existing active sessions for this user before creating a new one.
+    // Only one session should be active at a time.
+    await prisma.session.updateMany({
+      where: {
+        userId: req.userId!,
+        status: { in: ['active'] },
+      },
+      data: { endedAt: new Date(), status: 'ended' },
+    });
 
     const session = await prisma.session.create({
       data: {
