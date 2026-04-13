@@ -29,6 +29,7 @@ class TTSPlayer {
   private allChunksSent = false; // true after tts:done (finishWhisper)
   private endedWhileStreaming = false; // onEnded fired before all chunks arrived
   private speedMultiplier = 1.0; // 1.0 = normal, 1.5 = fast, 2.0 = fastest
+  private activeSpeed = 1.0; // Locked at whisper start to avoid mid-whisper jarring
 
   constructor(config: TTSPlayerConfig = {}) {
     this.config = config;
@@ -58,6 +59,7 @@ class TTSPlayer {
     this.playbackStarted = false;
     this.allChunksSent = false;
     this.endedWhileStreaming = false;
+    this.activeSpeed = this.speedMultiplier; // Lock speed for this whisper
     this.isPlaying = true;
 
     // Create a fresh queue source node
@@ -140,9 +142,9 @@ class TTSPlayer {
     if (!this.audioContext || !this.queueSource) return;
 
     // Speed control: decimate samples to shorten audio duration.
-    // Skipping every Nth sample plays the same content in less time.
-    const data = this.speedMultiplier > 1.0
-      ? this.decimateSamples(float32Data, this.speedMultiplier)
+    // Uses activeSpeed (locked at whisper start) to avoid jarring mid-whisper changes.
+    const data = this.activeSpeed > 1.0
+      ? this.decimateSamples(float32Data, this.activeSpeed)
       : float32Data;
 
     const buffer = this.audioContext.createBuffer(NUM_CHANNELS, data.length, SAMPLE_RATE);
@@ -150,8 +152,9 @@ class TTSPlayer {
     this.queueSource.enqueueBuffer(buffer);
   }
 
-  /** Reduce sample count by speedMultiplier — 2x = half the samples = double speed */
+  /** Reduce sample count by speed factor — 2x = half the samples = double speed */
   private decimateSamples(input: Float32Array, speed: number): Float32Array {
+    if (input.length === 0) return input;
     const outputLen = Math.ceil(input.length / speed);
     const output = new Float32Array(outputLen);
     for (let i = 0; i < outputLen; i++) {

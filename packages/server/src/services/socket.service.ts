@@ -606,8 +606,11 @@ export function setupSocketHandlers(io: Server) {
     });
 
     socket.on('tts:speed', (data: { speed: string }) => {
-      if (tts && (data.speed === 'normal' || data.speed === 'fast' || data.speed === 'fastest')) {
-        tts.setSpeed(data.speed);
+      const valid = ['normal', 'fast', 'fastest'] as const;
+      if (tts) {
+        // Map 'ultra' to 'fastest' (Cartesia's max) — client handles 3x via decimation
+        const mapped = data.speed === 'ultra' ? 'fastest' : data.speed;
+        if (valid.includes(mapped as any)) tts.setSpeed(mapped as any);
       }
     });
 

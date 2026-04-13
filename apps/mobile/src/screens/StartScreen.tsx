@@ -325,6 +325,10 @@ export function StartScreen() {
           registerSessionListeners(sock);
           const payload = startPayloadRef.current || { sessionId: sessionIdRef.current };
           sock.emit('session:start', payload);
+          // Re-send TTS speed setting (server creates fresh TTS on reconnect)
+          if (ttsSpeed !== 'normal') {
+            sock.emit('tts:speed', { speed: ttsSpeed });
+          }
         }
       }
     });

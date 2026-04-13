@@ -214,7 +214,7 @@ export class RealtimeService {
         item: {
           type: 'message',
           role: 'user',
-          content: [{ type: 'input_text', text: `[RULE: Write your JSON "content" in ${this.ownerLanguage} ONLY. Not Chinese, not Spanish — ${this.ownerLanguage}.]` }],
+          content: [{ type: 'input_text', text: `[RULE: Your JSON "content" MUST be in ${this.ownerLanguage}. Always ${this.ownerLanguage}.]` }],
         },
       });
       console.log(`[Realtime] Triggering auto-response after ${this.linesSinceLastResponse} lines`);
