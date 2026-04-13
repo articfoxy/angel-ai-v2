@@ -139,12 +139,31 @@ class TTSPlayer {
   private enqueueAudio(float32Data: Float32Array): void {
     if (!this.audioContext || !this.queueSource) return;
 
-    // Speed control: tell the AudioBuffer its sample rate is higher than actual.
-    // Audio is 24kHz. At 1.5x, we say it's 36kHz → plays 1.5x faster.
-    const effectiveRate = Math.round(SAMPLE_RATE * this.speedMultiplier);
-    const buffer = this.audioContext.createBuffer(NUM_CHANNELS, float32Data.length, effectiveRate);
-    buffer.copyToChannel(float32Data, 0, 0);
+    // Speed control: decimate samples to shorten audio duration.
+    // Skipping every Nth sample plays the same content in less time.
+    const data = this.speedMultiplier > 1.0
+      ? this.decimateSamples(float32Data, this.speedMultiplier)
+      : float32Data;
+
+    const buffer = this.audioContext.createBuffer(NUM_CHANNELS, data.length, SAMPLE_RATE);
+    buffer.copyToChannel(data, 0, 0);
     this.queueSource.enqueueBuffer(buffer);
+  }
+
+  /** Reduce sample count by speedMultiplier — 2x = half the samples = double speed */
+  private decimateSamples(input: Float32Array, speed: number): Float32Array {
+    const outputLen = Math.ceil(input.length / speed);
+    const output = new Float32Array(outputLen);
+    for (let i = 0; i < outputLen; i++) {
+      // Linear interpolation between source samples for smoother output
+      const srcPos = i * speed;
+      const srcIdx = Math.floor(srcPos);
+      const frac = srcPos - srcIdx;
+      const a = input[srcIdx] || 0;
+      const b = input[Math.min(srcIdx + 1, input.length - 1)] || 0;
+      output[i] = a + frac * (b - a);
+    }
+    return output;
   }
 
   /**
