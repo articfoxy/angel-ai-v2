@@ -701,9 +701,9 @@ export function setupSocketHandlers(io: Server) {
         const interimId = `test-interim-${segIdx}`;
         const finalId = `test-final-${segIdx}`;
 
-        // For Chinese test: split into chunks (Chinese characters ~3 per chunk)
-        // For other tests: just emit final immediately
-        const isStreaming = testType === 'chinese';
+        // Stream only lines containing Chinese characters — English lines emit immediately
+        const hasChinese = /[\u4e00-\u9fff\u3400-\u4dbf]/.test(seg.text);
+        const isStreaming = testType === 'chinese' && hasChinese;
         if (!isStreaming) {
           socket.emit('transcript', { id: finalId, speaker: sp.id, speakerLabel: sp.label, text: seg.text, isFinal: true, timestamp: Date.now() });
           transcriptBuffer.push(`[${sp.label}]: ${seg.text.slice(0, 500)}`);

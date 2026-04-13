@@ -103,7 +103,7 @@ export function StartScreen() {
   const [liveDirective, setLiveDirective] = useState('');
   const [instructionsFocused, setInstructionsFocused] = useState(false);
   const [directiveFocused, setDirectiveFocused] = useState(false);
-  const [ttsSpeed, setTtsSpeed] = useState<'normal' | 'fast' | 'fastest'>('normal');
+  const [ttsSpeed, setTtsSpeed] = useState<'normal' | 'fast' | 'fastest' | 'ultra'>('normal');
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const testRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isStartingRef = useRef(false); // Double-tap guard for session creation
@@ -400,10 +400,10 @@ export function StartScreen() {
     }
   }, [liveDirective]);
 
-  const changeTtsSpeed = useCallback((speed: 'normal' | 'fast' | 'fastest') => {
+  const changeTtsSpeed = useCallback((speed: 'normal' | 'fast' | 'fastest' | 'ultra') => {
     setTtsSpeed(speed);
     // Client-side speed control (reliable — adjusts AudioBuffer sample rate)
-    const multiplier = speed === 'normal' ? 1.0 : speed === 'fast' ? 1.5 : 2.0;
+    const multiplier = speed === 'normal' ? 1.0 : speed === 'fast' ? 1.5 : speed === 'fastest' ? 2.0 : 3.0;
     const player = getTTSPlayer();
     player.setSpeed(multiplier);
     // Also tell server (for Cartesia-native speed if supported)
@@ -789,14 +789,14 @@ export function StartScreen() {
       {/* Speed toggle for TTS (translation mode only) */}
       {isActive && angelMode === 'translation' && (
         <View style={styles.speedRow}>
-          {(['normal', 'fast', 'fastest'] as const).map((s) => (
+          {(['normal', 'fast', 'fastest', 'ultra'] as const).map((s) => (
             <TouchableOpacity
               key={s}
               style={[styles.speedChip, ttsSpeed === s && styles.speedChipActive]}
               onPress={() => changeTtsSpeed(s)}
             >
               <Text style={[styles.speedText, ttsSpeed === s && styles.speedTextActive]}>
-                {s === 'normal' ? '1×' : s === 'fast' ? '1.5×' : '2×'}
+                {s === 'normal' ? '1×' : s === 'fast' ? '1.5×' : s === 'fastest' ? '2×' : '3×'}
               </Text>
             </TouchableOpacity>
           ))}
