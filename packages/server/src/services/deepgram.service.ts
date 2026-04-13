@@ -22,6 +22,8 @@ interface DeepgramConfig {
   keywords?: string[];
   /** Speech locale hint, e.g. "en-US", "en-GB". Falls back to "multi" if not set. */
   speechLocale?: string;
+  /** Session mode — translation mode uses shorter endpointing for clause-level segments */
+  mode?: string;
 }
 
 const CONNECTION_TIMEOUT_MS = 5000;
@@ -84,7 +86,9 @@ export class DeepgramService {
       sample_rate: 16000,
       channels: 1,
       interim_results: true,
-      endpointing: 150,
+      // Translation mode: 80ms endpointing for clause-level segments (faster translation)
+      // Other modes: 150ms for full-sentence segments (more context for insights)
+      endpointing: this.config.mode === 'translation' || this.config.mode === 'hybrid' ? 80 : 150,
       vad_events: true,
       no_delay: true,
     };
@@ -94,7 +98,7 @@ export class DeepgramService {
       dgOptions.keywords = this.config.keywords;
     }
 
-    console.log(`[Deepgram] Language: ${dgOptions.language}, Keywords: ${this.config.keywords?.length || 0}`);
+    console.log(`[Deepgram] Mode: ${this.config.mode || 'default'}, Language: ${dgOptions.language}, Endpointing: ${dgOptions.endpointing}ms`);
     this.connection = deepgram.listen.live(dgOptions);
 
     // Wait for the connection to actually open before returning.

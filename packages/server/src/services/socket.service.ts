@@ -247,9 +247,9 @@ export function setupSocketHandlers(io: Server) {
       const ownerLanguage = ALLOWED_OWNER_LANGUAGES.includes(payload.ownerLanguage as string)
         ? (payload.ownerLanguage as string)
         : 'English';
+      const sessionMode = payload.mode || 'intelligence';
 
       if (openaiKey) {
-        const sessionMode = payload.mode || 'intelligence';
         const translateLanguages = payload.translateLanguages || [];
         const intPresets = payload.intelligencePresets || ['jargon'];
         const customInstr = payload.customInstructions || '';
@@ -463,6 +463,7 @@ export function setupSocketHandlers(io: Server) {
         userId,
         keywords: payload.speech?.keywords,
         speechLocale: payload.speech?.speechLocale,
+        mode: sessionMode,
       });
 
       try {
