@@ -786,8 +786,8 @@ export function StartScreen() {
         </View>
       )}
 
-      {/* Speed toggle for TTS (translation mode only) */}
-      {isActive && angelMode === 'translation' && (
+      {/* Speed toggle for TTS */}
+      {isActive && (
         <View style={styles.speedRow}>
           {(['normal', 'fast', 'fastest', 'ultra'] as const).map((s) => (
             <TouchableOpacity
