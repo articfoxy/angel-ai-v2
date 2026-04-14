@@ -11,6 +11,7 @@ import {
   Linking,
   ActivityIndicator,
 } from 'react-native';
+import * as ExpoClipboard from 'expo-clipboard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { AudioContext, AudioBufferQueueSourceNode } from 'react-native-audio-api';
@@ -86,6 +87,25 @@ export function SettingsScreen() {
 
   const version = Constants.expoConfig?.version || '2.0.0';
   const buildNumber = Constants.expoConfig?.ios?.buildNumber || '';
+  const [workers, setWorkers] = useState<{ id: string; name: string; busy: boolean }[]>([]);
+  const [showSetup, setShowSetup] = useState(false);
+  const [copiedToken, setCopiedToken] = useState(false);
+
+  const loadWorkers = React.useCallback(async () => {
+    try {
+      const res = await api.get<{ id: string; name: string; busy: boolean }[]>('workers');
+      if (Array.isArray(res)) setWorkers(res);
+    } catch {}
+  }, []);
+
+  const copySetupCommand = React.useCallback(async () => {
+    const token = await getStoredToken();
+    if (!token) { Alert.alert('Error', 'Not logged in'); return; }
+    const cmd = `bash <(curl -fsSL https://raw.githubusercontent.com/articfoxy/angel-ai-v2/main/packages/worker/setup.sh) --token ${token}`;
+    await ExpoClipboard.setStringAsync(cmd);
+    setCopiedToken(true);
+    setTimeout(() => setCopiedToken(false), 3000);
+  }, []);
 
   const loadVoiceprintStatus = React.useCallback(async () => {
     try {
@@ -122,7 +142,8 @@ export function SettingsScreen() {
     loadVoices();
     loadAudioDevices();
     loadSelectedVoice();
-  }, [loadVoiceprintStatus, loadVoices, loadAudioDevices, loadSelectedVoice]);
+    loadWorkers();
+  }, [loadVoiceprintStatus, loadVoices, loadAudioDevices, loadSelectedVoice, loadWorkers]);
 
   React.useEffect(() => {
     return () => {
@@ -701,6 +722,91 @@ export function SettingsScreen() {
           </View>
         </View>
 
+        {/* Claude Code Bridge */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Claude Code Bridge</Text>
+          <View style={styles.card}>
+            <View style={styles.toggleRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cardLabel}>Connected Machines</Text>
+                <Text style={styles.cardDesc}>
+                  {workers.length === 0
+                    ? 'No machines connected. Run the setup command on your dev machine.'
+                    : `${workers.length} machine${workers.length > 1 ? 's' : ''} online`}
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={loadWorkers}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="refresh-outline" size={20} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            {workers.length > 0 && (
+              <View style={{ marginTop: spacing.sm, gap: spacing.xs }}>
+                {workers.map((w) => (
+                  <View key={w.id} style={styles.workerRow}>
+                    <Ionicons
+                      name={w.busy ? 'hourglass-outline' : 'checkmark-circle'}
+                      size={16}
+                      color={w.busy ? colors.warning : colors.success}
+                    />
+                    <Text style={styles.workerName}>{w.name}</Text>
+                    <Text style={styles.workerStatus}>{w.busy ? 'Busy' : 'Ready'}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+          </View>
+
+          <TouchableOpacity
+            style={styles.card}
+            onPress={() => setShowSetup(!showSetup)}
+            activeOpacity={0.7}
+          >
+            <View style={styles.toggleRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cardLabel}>
+                  <Ionicons name="terminal-outline" size={15} color={colors.primary} />{' '}
+                  Setup New Machine
+                </Text>
+                <Text style={styles.cardDesc}>Connect Claude Code on your Mac, PC, or server</Text>
+              </View>
+              <Ionicons
+                name={showSetup ? 'chevron-up' : 'chevron-down'}
+                size={18}
+                color={colors.textTertiary}
+              />
+            </View>
+            {showSetup && (
+              <View style={{ marginTop: spacing.md }}>
+                <Text style={[styles.cardDesc, { marginBottom: spacing.sm }]}>
+                  Run this in your terminal on the machine you want to connect:
+                </Text>
+                <View style={{
+                  backgroundColor: colors.bg,
+                  borderRadius: 8,
+                  padding: spacing.sm,
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                }}>
+                  <Text style={{ color: colors.primary, fontSize: 11, fontFamily: 'monospace' }} numberOfLines={3}>
+                    bash {'<'}(curl -fsSL https://raw.githubusercontent.com/articfoxy/angel-ai-v2/main/packages/worker/setup.sh) --token YOUR_TOKEN
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={[styles.saveKeyButton, { marginTop: spacing.sm, alignSelf: 'flex-start' }]}
+                  onPress={copySetupCommand}
+                >
+                  <Text style={styles.saveKeyText}>
+                    {copiedToken ? '✓ Copied with your token!' : 'Copy Command (with token)'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+
         {/* Account */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account</Text>
@@ -985,6 +1091,22 @@ const styles = StyleSheet.create({
     color: colors.textTertiary,
     fontSize: fontSize.xs,
     marginTop: 2,
+  },
+  workerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  workerName: {
+    color: colors.text,
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+    flex: 1,
+  },
+  workerStatus: {
+    color: colors.textTertiary,
+    fontSize: fontSize.xs,
   },
   versionText: {
     color: colors.textTertiary,
