@@ -2,6 +2,7 @@ import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { StartScreen } from '../screens/StartScreen';
+import { HistoryScreen } from '../screens/HistoryScreen';
 import { MemoryScreen } from '../screens/MemoryScreen';
 import { SkillsScreen } from '../screens/SkillsScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
@@ -9,6 +10,7 @@ import { colors, fontSize } from '../theme';
 
 export type TabParamList = {
   Start: undefined;
+  History: undefined;
   Memory: undefined;
   Skills: undefined;
   Settings: undefined;
@@ -44,6 +46,15 @@ export function MainTabs() {
         options={{
           tabBarIcon: ({ color, focused }) => (
             <Ionicons name={focused ? 'radio' : 'radio-outline'} size={22} color={color} />
+          ),
+        }}
+      />
+      <Tab.Screen
+        name="History"
+        component={HistoryScreen}
+        options={{
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'time' : 'time-outline'} size={22} color={color} />
           ),
         }}
       />
