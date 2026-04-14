@@ -8,6 +8,7 @@ import {
   TextInput,
   RefreshControl,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -220,7 +221,25 @@ export function MemoryScreen() {
           ) : filteredMemories.length > 0 ? (
             filteredMemories.map((memory) => (
               <View key={memory.id} style={styles.memoryCard}>
-                <Text style={styles.memoryContent}>{memory.content}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+                  <Text style={[styles.memoryContent, { flex: 1 }]}>{memory.content}</Text>
+                  <TouchableOpacity
+                    onPress={() => {
+                      Alert.alert('Delete Memory', 'Remove this memory?', [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Delete', style: 'destructive',
+                          onPress: async () => {
+                            try { await api.delete(`memory/memories/${memory.id}`); refetchMemories(); } catch {}
+                          },
+                        },
+                      ]);
+                    }}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="trash-outline" size={16} color={colors.textTertiary} />
+                  </TouchableOpacity>
+                </View>
                 <View style={styles.memoryMeta}>
                   {memory.category && (
                     <View style={styles.memoryBadge}>

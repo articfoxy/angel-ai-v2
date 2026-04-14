@@ -881,7 +881,7 @@ export function setupSocketHandlers(io: Server) {
         });
 
         // Post-session: extract memories, entities, reflections
-        const extraction = new ExtractionService();
+        const extraction = new ExtractionService(sessionOpenaiKey);
         extraction.processSession(sessionId, userId).then(async (extractionResult) => {
           const summary = extractionResult?.summary || 'Session completed';
 
@@ -910,7 +910,7 @@ export function setupSocketHandlers(io: Server) {
           try {
             await prisma.session.update({
               where: { id: sessionId },
-              data: { status: 'ended', summary: { error: 'Extraction failed' } },
+              data: { status: 'ended', summary: 'Session ended (extraction failed)' },
             });
           } catch {}
           socket.emit('session:debrief', {
