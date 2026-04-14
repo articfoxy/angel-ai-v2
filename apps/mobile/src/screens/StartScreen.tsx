@@ -415,15 +415,30 @@ export function StartScreen() {
     await SecureStore.setItemAsync('angel_v2_custom_instructions', text);
   }, []);
 
-  const sendLiveDirective = useCallback(() => {
+  const sendMessage = useCallback(() => {
     const text = liveDirective.trim();
     if (!text) return;
     const sock = getSocket();
-    if (sock?.connected) {
-      sock.emit('session:instruct', { text });
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      setLiveDirective('');
+    if (!sock?.connected) return;
+
+    if (text.startsWith('/')) {
+      // System command — modifies Angel's behavior
+      sock.emit('session:instruct', { text: text.slice(1).trim() });
+    } else {
+      // Message to Angel — fed as Owner transcript so AI responds
+      sock.emit('session:message', { text });
+      // Show it locally as a transcript segment
+      setSegments((prev) => [...prev, {
+        id: `msg-${Date.now()}`,
+        speaker: 'owner',
+        speakerLabel: 'You',
+        text,
+        isFinal: true,
+        timestamp: Date.now(),
+      }]);
     }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setLiveDirective('');
   }, [liveDirective]);
 
   const changeTtsSpeed = useCallback((speed: 'normal' | 'fast' | 'fastest' | 'ultra') => {
@@ -813,14 +828,14 @@ export function StartScreen() {
             onChangeText={setLiveDirective}
             onFocus={() => setDirectiveFocused(true)}
             onBlur={() => setDirectiveFocused(false)}
-            placeholder="Angel command..."
+            placeholder="Talk to Angel... ( /command )"
             placeholderTextColor={colors.textTertiary}
             returnKeyType="send"
-            onSubmitEditing={sendLiveDirective}
+            onSubmitEditing={sendMessage}
             blurOnSubmit={false}
           />
           {liveDirective.trim().length > 0 && (
-            <TouchableOpacity onPress={sendLiveDirective} style={styles.directiveSend}>
+            <TouchableOpacity onPress={sendMessage} style={styles.directiveSend}>
               <Ionicons name="arrow-up-circle" size={28} color={colors.primary} />
             </TouchableOpacity>
           )}

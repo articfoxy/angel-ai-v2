@@ -653,6 +653,20 @@ export function setupSocketHandlers(io: Server) {
     });
 
     // Live instruction update — modifies the Realtime AI system prompt mid-session
+    // Text message from user — fed to AI as [Owner] transcript line
+    socket.on('session:message', (data: { text: string }) => {
+      if (!realtime || !data?.text?.trim()) return;
+      const text = data.text.trim();
+      console.log(`[session] Text message from owner: "${text.slice(0, 80)}"`);
+
+      // Add to transcript buffer (same as speech)
+      transcriptBuffer.push(`[Owner]: ${text.slice(0, 500)}`);
+      if (transcriptBuffer.length > 60) transcriptBuffer = transcriptBuffer.slice(-40);
+
+      // Feed to Realtime AI as owner speech
+      realtime.feedTranscript(`[Owner]: ${text}`);
+    });
+
     socket.on('session:instruct', (data: { text: string }) => {
       if (!realtime || !data?.text?.trim()) return;
       const directive = data.text.trim();
