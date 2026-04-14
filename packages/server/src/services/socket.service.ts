@@ -9,6 +9,7 @@ import { ExtractionService } from './memory/extraction.service';
 import { runPostSessionReflection } from './memory/reflection.service';
 import { RetrievalService } from './memory/retrieval.service';
 import { PerplexityService } from './perplexity.service';
+import { codeWorkerHub } from './codeworker.service';
 import { CartesiaTTSService } from './tts.service';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
@@ -88,7 +89,7 @@ export function setupSocketHandlers(io: Server) {
      */
     async function handleRealtimeWhisper(
       userId: string,
-      whisper: { type: string; content: string; detail?: string; confidence?: number; action?: 'save_memory' | 'web_search'; actionData?: Record<string, unknown> }
+      whisper: { type: string; content: string; detail?: string; confidence?: number; action?: 'save_memory' | 'web_search' | 'code_task'; actionData?: Record<string, unknown> }
     ): Promise<void> {
       // Execute actions if the model returned a command
       if (whisper.action === 'save_memory' && whisper.actionData) {
@@ -153,6 +154,51 @@ export function setupSocketHandlers(io: Server) {
           } catch {
             whisper.detail = 'Search failed. I\'ll answer from my knowledge instead.';
           }
+        }
+      }
+
+      // Handle code_task action — dispatch to Claude Code worker
+      if (whisper.action === 'code_task' && whisper.actionData?.prompt) {
+        const taskPrompt = String(whisper.actionData.prompt);
+        const taskContext = String(whisper.actionData.context || transcriptBuffer.slice(-5).join('\n'));
+        whisper.content = `💻 ${taskPrompt.slice(0, 100)}`;
+        whisper.type = 'code';
+
+        if (codeWorkerHub.hasWorkers(userId)) {
+          const task = codeWorkerHub.dispatchTask(userId, taskPrompt, taskContext, undefined, {
+            onChunk: (text) => {
+              socket.emit('whisper', {
+                id: uuid(),
+                type: 'code',
+                content: `⏳ ${text.slice(-200)}`,
+                createdAt: new Date().toISOString(),
+              });
+            },
+            onComplete: (result) => {
+              socket.emit('whisper', {
+                id: uuid(),
+                type: 'code',
+                content: '✅ Task completed',
+                detail: result.slice(0, 500),
+                createdAt: new Date().toISOString(),
+              });
+            },
+            onError: (error) => {
+              socket.emit('whisper', {
+                id: uuid(),
+                type: 'warning',
+                content: `❌ Task failed: ${error.slice(0, 100)}`,
+                createdAt: new Date().toISOString(),
+              });
+            },
+          });
+          if (task) {
+            whisper.detail = `Sent to worker. Task ID: ${task.taskId}`;
+          } else {
+            whisper.detail = 'All workers are busy. Task queued.';
+          }
+        } else {
+          whisper.detail = 'No connected workers. Run the Angel worker agent on your machine.';
         }
       }
 

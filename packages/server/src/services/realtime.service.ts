@@ -14,7 +14,7 @@ interface RealtimeWhisper {
   content: string;
   detail?: string;
   confidence?: number;
-  action?: 'save_memory' | 'web_search';
+  action?: 'save_memory' | 'web_search' | 'code_task';
   actionData?: Record<string, unknown>;
 }
 
@@ -171,6 +171,19 @@ export class RealtimeService {
                 query: { type: 'string', description: 'Search query' },
               },
               required: ['query'],
+            },
+          },
+          {
+            type: 'function',
+            name: 'code_task',
+            description: 'Send a coding task to the user\'s Claude Code instance. Use when the user asks you to write code, build something, fix a bug, or do any coding work.',
+            parameters: {
+              type: 'object',
+              properties: {
+                prompt: { type: 'string', description: 'The coding task description — what to build/fix/write' },
+                context: { type: 'string', description: 'Relevant conversation context that helps with the task' },
+              },
+              required: ['prompt'],
             },
           },
         ],

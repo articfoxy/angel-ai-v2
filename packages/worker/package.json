@@ -1,0 +1,17 @@
+{
+  "name": "angel-worker",
+  "version": "1.0.0",
+  "description": "Angel AI Claude Code worker agent",
+  "main": "index.ts",
+  "scripts": {
+    "start": "npx ts-node index.ts"
+  },
+  "dependencies": {
+    "ws": "^8.14.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0"
+  }
+}

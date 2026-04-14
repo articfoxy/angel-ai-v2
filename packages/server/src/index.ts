@@ -12,8 +12,10 @@ import { memoryRouter } from './routes/memory';
 import { skillsRouter } from './routes/skills';
 import { voiceprintRouter } from './routes/voiceprint';
 import { voicesRouter } from './routes/voices';
+import { workersRouter } from './routes/workers';
 import { authenticateToken } from './middleware/auth';
 import { setupSocketHandlers } from './services/socket.service';
+import { codeWorkerHub } from './services/codeworker.service';
 
 export const prisma = new PrismaClient();
 
@@ -132,9 +134,59 @@ app.use('/api/sessions', authenticateToken, sessionsRouter);
 app.use('/api/memory', authenticateToken, memoryRouter);
 app.use('/api/skills', authenticateToken, skillsRouter);
 app.use('/api/voiceprint', authenticateToken, voiceprintRouter);
+app.use('/api/workers', authenticateToken, workersRouter);
 
 // Socket.io
 setupSocketHandlers(io);
+
+// WebSocket upgrade for Claude Code workers (separate from socket.io)
+import jwt from 'jsonwebtoken';
+import WebSocket from 'ws';
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
+const wss = new WebSocket.Server({ noServer: true });
+
+server.on('upgrade', (req, socket, head) => {
+  // Socket.io handles its own upgrades — only intercept /ws/worker
+  if (!req.url?.startsWith('/ws/worker')) return;
+
+  // Parse auth token and machine name from URL params
+  const url = new URL(req.url, `http://${req.headers.host}`);
+  const token = url.searchParams.get('token');
+  const machineName = url.searchParams.get('name') || 'Unknown Machine';
+
+  if (!token) { socket.destroy(); return; }
+
+  try {
+    const payload = jwt.verify(token, JWT_SECRET) as { userId: string };
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      const workerId = codeWorkerHub.registerWorker(payload.userId, machineName, ws);
+
+      ws.on('message', (data: WebSocket.Data) => {
+        try {
+          const msg = JSON.parse(data.toString());
+          switch (msg.type) {
+            case 'chunk':
+              codeWorkerHub.handleChunk(workerId, msg.taskId, msg.text);
+              break;
+            case 'complete':
+              codeWorkerHub.handleComplete(workerId, msg.taskId, msg.result || '');
+              break;
+            case 'error':
+              codeWorkerHub.handleError(workerId, msg.taskId, msg.error || 'Unknown error');
+              break;
+          }
+        } catch {}
+      });
+
+      ws.on('close', () => codeWorkerHub.removeWorker(workerId));
+      ws.on('error', () => codeWorkerHub.removeWorker(workerId));
+
+      ws.send(JSON.stringify({ type: 'registered', workerId, name: machineName }));
+    });
+  } catch {
+    socket.destroy();
+  }
+});
 
 // Startup safety checks
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'dev-secret') {
