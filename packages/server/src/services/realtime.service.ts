@@ -22,7 +22,7 @@ interface RealtimeConfig {
   apiKey: string;
   instructions: string;
   ownerLanguage?: string;
-  mode?: 'translation' | 'intelligence' | 'hybrid';
+  mode?: 'translation' | 'intelligence' | 'hybrid' | 'code';
   onWhisper: (whisper: RealtimeWhisper) => void;
   onError?: (error: string) => void;
   onStatus?: (status: 'connected' | 'reconnecting' | 'disconnected' | 'error') => void;
@@ -36,6 +36,7 @@ function getTriggerThreshold(mode?: string): number {
   switch (mode) {
     case 'translation': return 1;
     case 'hybrid': return 2;
+    case 'code': return 2;
     default: return 3;
   }
 }
@@ -233,6 +234,9 @@ export class RealtimeService {
     }
     if (this.mode === 'hybrid') {
       return `${langRule} PRIORITY 1: Translate any foreign-language lines into ${lang}. PRIORITY 2: Provide intelligence insights. Format: {"type":"translation"|"insight"|"definition","content":"..."}. ${skipRule} Valid JSON only.`;
+    }
+    if (this.mode === 'code') {
+      return `${langRule} You are a coding assistant. Analyze the technical discussion and provide code insights, debugging help, architecture suggestions, or explain concepts. Format: {"type":"code"|"insight"|"definition"|"warning","content":"..."}. ${skipRule} Valid JSON only.`;
     }
     // intelligence mode
     return `${langRule} Analyze the recent transcript. Provide useful insights based on your instructions. Format: {"type":"insight"|"definition"|"action"|"warning","content":"..."}. ${skipRule} Valid JSON only.`;
@@ -539,6 +543,15 @@ export class RealtimeService {
   }
 }
 
+const CODE_PRESET_MAP: Record<string, string> = {
+  debug: 'Help debug issues — suggest root causes, logging strategies, and fix approaches.',
+  refactor: 'Suggest cleaner code patterns, DRY improvements, and performance optimizations.',
+  explain: 'Explain technical concepts, APIs, libraries, and code patterns mentioned in the conversation.',
+  architecture: 'Comment on system design decisions — scalability, patterns, trade-offs, and best practices.',
+  review: 'Review code being discussed — catch potential bugs, suggest improvements, flag anti-patterns.',
+  docs: 'Help with documentation — API docs, README structure, code comments, and technical writing.',
+};
+
 const INTELLIGENCE_PRESET_MAP: Record<string, string> = {
   jargon: 'Explain any jargon, acronyms, or technical terms used in the conversation.',
   meeting: 'Track action items, decisions, and key takeaways from the conversation.',
@@ -556,6 +569,7 @@ export function buildAngelInstructions(
   mode: string,
   translateLanguages: string[],
   intelligencePresets: string[],
+  codePresets: string[],
   customInstructions: string,
   memoryContext: string,
 ): string {
@@ -622,6 +636,31 @@ ${intInstructions}
 - Insight: { "type": "insight", "content": "observation or suggestion" }
 - Action item: { "type": "action", "content": "action to take" }
 - Warning: { "type": "warning", "content": "watch out for..." }
+${commonRules}`;
+  }
+
+  if (mode === 'code') {
+    const codeTexts = codePresets.map(id => CODE_PRESET_MAP[id]).filter(Boolean);
+    const codeInstructions = codeTexts.length > 0 ? codeTexts.join('\n') : 'Help with debugging and explain code concepts.';
+
+    return `${langRule}
+
+You are Angel, a coding assistant whispering in the developer's ear via AirPods. You listen to technical conversations and provide real-time coding intelligence.
+
+## YOUR ROLE
+- Listen to discussions about code, architecture, debugging, APIs, and technical decisions
+- Provide suggestions, catch issues, explain concepts, reference best practices
+- When asked directly, generate code snippets, pseudocode, or implementation approaches
+- You are NOT writing code — you are advising the developer who IS writing code
+
+## CODING FOCUS
+${codeInstructions}
+
+## HOW TO RESPOND
+- Code insight: { "type": "code", "content": "suggestion or code snippet" }
+- Definition: { "type": "definition", "content": "TERM — technical explanation" }
+- Warning: { "type": "warning", "content": "potential issue or anti-pattern" }
+- Architecture: { "type": "insight", "content": "design suggestion or trade-off" }
 ${commonRules}`;
   }
 

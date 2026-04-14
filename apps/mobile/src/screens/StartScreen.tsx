@@ -53,12 +53,13 @@ const SESSION_EVENTS = [
   'realtime:status',
 ] as const;
 
-type AngelMode = 'translation' | 'intelligence' | 'hybrid';
+type AngelMode = 'translation' | 'intelligence' | 'hybrid' | 'code';
 
 const ANGEL_MODES: { id: AngelMode; label: string; icon: string; desc: string }[] = [
   { id: 'translation', label: 'Translation', icon: 'language-outline', desc: 'Smart live translation' },
   { id: 'intelligence', label: 'Intelligence', icon: 'bulb-outline', desc: 'Insights & coaching' },
   { id: 'hybrid', label: 'Hybrid', icon: 'git-merge-outline', desc: 'Translate + insights' },
+  { id: 'code', label: 'Code', icon: 'code-slash-outline', desc: 'Coding assistant' },
 ];
 
 const TRANSLATE_LANGUAGES = [
@@ -81,6 +82,15 @@ const INTELLIGENCE_PRESETS = [
   { id: 'learn', label: 'Help me learn', icon: '🧠' },
 ];
 
+const CODE_PRESETS = [
+  { id: 'debug', label: 'Debug', icon: '🐛' },
+  { id: 'refactor', label: 'Refactor', icon: '♻️' },
+  { id: 'explain', label: 'Explain code', icon: '💡' },
+  { id: 'architecture', label: 'Architecture', icon: '🏗️' },
+  { id: 'review', label: 'Code review', icon: '🔍' },
+  { id: 'docs', label: 'Documentation', icon: '📝' },
+];
+
 export function StartScreen() {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<any>();
@@ -99,6 +109,7 @@ export function StartScreen() {
   const [angelMode, setAngelMode] = useState<AngelMode>('intelligence');
   const [translateLangs, setTranslateLangs] = useState<string[]>(['Chinese']);
   const [intelligencePresets, setIntelligencePresets] = useState<string[]>(['jargon']);
+  const [codePresets, setCodePresets] = useState<string[]>(['debug', 'explain']);
   const [customInstructions, setCustomInstructions] = useState('');
   const [liveDirective, setLiveDirective] = useState('');
   const [instructionsFocused, setInstructionsFocused] = useState(false);
@@ -358,6 +369,8 @@ export function StartScreen() {
         if (savedLangs) { const p = JSON.parse(savedLangs); if (Array.isArray(p)) setTranslateLangs(p); }
         const savedPresets = await SecureStore.getItemAsync('angel_v2_intelligence_presets');
         if (savedPresets) { const p = JSON.parse(savedPresets); if (Array.isArray(p)) setIntelligencePresets(p); }
+        const savedCodePresets = await SecureStore.getItemAsync('angel_v2_code_presets');
+        if (savedCodePresets) { const p = JSON.parse(savedCodePresets); if (Array.isArray(p)) setCodePresets(p); }
         const savedCustom = await SecureStore.getItemAsync('angel_v2_custom_instructions');
         if (savedCustom) setCustomInstructions(savedCustom);
       } catch {}
@@ -384,6 +397,15 @@ export function StartScreen() {
     setIntelligencePresets((prev) => {
       const updated = prev.includes(presetId) ? prev.filter((p) => p !== presetId) : [...prev, presetId];
       SecureStore.setItemAsync('angel_v2_intelligence_presets', JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
+
+  const toggleCodePreset = useCallback((presetId: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setCodePresets((prev) => {
+      const updated = prev.includes(presetId) ? prev.filter((p) => p !== presetId) : [...prev, presetId];
+      SecureStore.setItemAsync('angel_v2_code_presets', JSON.stringify(updated));
       return updated;
     });
   }, []);
@@ -542,6 +564,7 @@ export function StartScreen() {
           startPayload.mode = angelMode;
           startPayload.translateLanguages = translateLangs;
           startPayload.intelligencePresets = intelligencePresets;
+          startPayload.codePresets = codePresets;
           const savedCustom = await SecureStore.getItemAsync('angel_v2_custom_instructions');
           if (savedCustom?.trim()) startPayload.customInstructions = savedCustom.trim();
           const ownerLang = await SecureStore.getItemAsync('angel_v2_owner_language');
@@ -726,6 +749,20 @@ export function StartScreen() {
                 </View>
               </View>
             )}
+            {angelMode === 'code' && (
+              <View style={styles.modeOptions}>
+                <Text style={styles.optionLabel}>Code focus:</Text>
+                <View style={styles.presetGrid}>
+                  {CODE_PRESETS.map((preset) => (
+                    <TouchableOpacity key={preset.id} style={[styles.presetChip, codePresets.includes(preset.id) && styles.presetChipActive]} onPress={() => toggleCodePreset(preset.id)}>
+                      <Text style={styles.presetIcon}>{preset.icon}</Text>
+                      <Text style={[styles.presetLabel, codePresets.includes(preset.id) && styles.presetLabelActive]} numberOfLines={1}>{preset.label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            )}
+
             <TextInput
               style={[styles.customInput, instructionsFocused && styles.inputFocused]}
               value={customInstructions}

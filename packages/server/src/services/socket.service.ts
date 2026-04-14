@@ -8,6 +8,7 @@ import { RealtimeService, buildAngelInstructions } from './realtime.service';
 import { ExtractionService } from './memory/extraction.service';
 import { runPostSessionReflection } from './memory/reflection.service';
 import { RetrievalService } from './memory/retrieval.service';
+import { PerplexityService } from './perplexity.service';
 import { CartesiaTTSService } from './tts.service';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
@@ -127,16 +128,31 @@ export function setupSocketHandlers(io: Server) {
       }
 
       if (whisper.action === 'web_search' && whisper.actionData?.query) {
+        const query = String(whisper.actionData.query);
         try {
-          const results = await search.search(String(whisper.actionData.query));
-          const formatted = results
-            .map((r) => r.title ? `${r.title}: ${r.snippet}` : r.snippet)
-            .join('\n\n');
-          whisper.detail = formatted || 'No results found.';
-          whisper.content = `🔍 ${whisper.actionData.query}`;
+          // Use Perplexity if available (better results with citations), else fallback
+          const perplexity = new PerplexityService();
+          if (perplexity.isAvailable) {
+            const result = await perplexity.search(query);
+            whisper.detail = result.answer;
+            if (result.citations.length > 0) {
+              whisper.detail += '\n\nSources: ' + result.citations.slice(0, 3).join(', ');
+            }
+          } else {
+            const results = await search.search(query);
+            whisper.detail = results.map((r) => r.title ? `${r.title}: ${r.snippet}` : r.snippet).join('\n\n');
+          }
+          whisper.content = `🔍 ${query}`;
         } catch (searchErr) {
           console.error('[agent] Search failed:', searchErr);
-          whisper.detail = 'Search failed. I\'ll answer from my knowledge instead.';
+          // Fallback to basic search on Perplexity failure
+          try {
+            const results = await search.search(query);
+            whisper.detail = results.map((r) => r.title ? `${r.title}: ${r.snippet}` : r.snippet).join('\n\n');
+            whisper.content = `🔍 ${query}`;
+          } catch {
+            whisper.detail = 'Search failed. I\'ll answer from my knowledge instead.';
+          }
         }
       }
 
@@ -201,9 +217,10 @@ export function setupSocketHandlers(io: Server) {
       byok?: { provider: string; apiKey: string; model?: string };
       speech?: { keywords?: string[]; speechLocale?: string };
       instructions?: string;
-      mode?: 'translation' | 'intelligence' | 'hybrid';
+      mode?: 'translation' | 'intelligence' | 'hybrid' | 'code';
       translateLanguages?: string[];
       intelligencePresets?: string[];
+      codePresets?: string[];
       customInstructions?: string;
       ownerLanguage?: string;
       voiceId?: string;
@@ -262,6 +279,7 @@ export function setupSocketHandlers(io: Server) {
       if (openaiKey) {
         const translateLanguages = payload.translateLanguages || [];
         const intPresets = payload.intelligencePresets || ['jargon'];
+        const cdPresets = payload.codePresets || ['debug', 'explain'];
         const customInstr = payload.customInstructions || '';
 
         // Retrieve user memories for context injection
@@ -279,7 +297,7 @@ export function setupSocketHandlers(io: Server) {
           apiKey: openaiKey,
           ownerLanguage,
           mode: sessionMode,
-          instructions: buildAngelInstructions(ownerLanguage, sessionMode, translateLanguages, intPresets, customInstr, memoryContext),
+          instructions: buildAngelInstructions(ownerLanguage, sessionMode, translateLanguages, intPresets, cdPresets, customInstr, memoryContext),
           onWhisper: (whisper) => {
             handleRealtimeWhisper(userId, whisper).catch((err) => {
               console.error('[Realtime] Whisper handling error:', err);
