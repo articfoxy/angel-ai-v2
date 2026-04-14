@@ -8,6 +8,8 @@ import {
   Alert,
   TouchableOpacity,
   TextInput,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import * as Haptics from 'expo-haptics';
@@ -658,8 +660,14 @@ export function StartScreen() {
     }
   };
 
+  const modeLabel = ANGEL_MODES.find((m) => m.id === angelMode)?.label || 'Intelligence';
+
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
+    <KeyboardAvoidingView
+      style={[styles.container, { paddingTop: insets.top }]}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={0}
+    >
       {/* Header */}
       <View style={styles.header}>
         <View>
@@ -668,6 +676,9 @@ export function StartScreen() {
             <View style={styles.activeRow}>
               <Animated.View style={[styles.activeDot, dotStyle]} />
               <Text style={styles.activeText}>ACTIVE</Text>
+              <View style={styles.modeBadge}>
+                <Text style={styles.modeBadgeText}>{modeLabel}</Text>
+              </View>
               <Text style={styles.timer}>{formatTimer(elapsed)}</Text>
             </View>
           )}
@@ -816,7 +827,7 @@ export function StartScreen() {
           </TouchableOpacity>
         )}
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -850,6 +861,17 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xs,
     fontWeight: '700',
     letterSpacing: 1.2,
+  },
+  modeBadge: {
+    backgroundColor: colors.primaryMuted,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: radius.full,
+  },
+  modeBadgeText: {
+    color: colors.primary,
+    fontSize: fontSize.xs,
+    fontWeight: '700',
   },
   timer: {
     color: colors.textSecondary,
