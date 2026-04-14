@@ -17,9 +17,10 @@ import { colors, spacing, fontSize, radius } from '../theme';
 interface AngelButtonProps {
   onPress: () => void;
   isActive: boolean;
+  compact?: boolean;
 }
 
-export function AngelButton({ onPress, isActive }: AngelButtonProps) {
+export function AngelButton({ onPress, isActive, compact }: AngelButtonProps) {
   // Outer ring pulse
   const ringScale = useSharedValue(1);
   const ringOpacity = useSharedValue(0);
@@ -97,8 +98,33 @@ export function AngelButton({ onPress, isActive }: AngelButtonProps) {
     shadowRadius: 20 + glowIntensity.value * 20,
   }));
 
-  const SIZE = 120;
+  const SIZE = compact ? 48 : 120;
   const RING_SIZE = SIZE + 40;
+
+  if (compact) {
+    return (
+      <Animated.View
+        style={[
+          { shadowColor: isActive ? colors.success : colors.primary, shadowOffset: { width: 0, height: 0 }, elevation: 6 },
+          glowStyle,
+        ]}
+      >
+        <TouchableOpacity onPress={onPress} activeOpacity={0.85}>
+          <LinearGradient
+            colors={isActive ? ['#34d399', '#059669'] : ['#7c7fff', '#6366f1']}
+            start={{ x: 0.2, y: 0 }}
+            end={{ x: 0.8, y: 1 }}
+            style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, paddingVertical: 12, borderRadius: 24 }}
+          >
+            <Ionicons name={isActive ? 'stop' : 'mic'} size={18} color="#fff" />
+            <Text style={{ color: '#fff', fontSize: fontSize.sm, fontWeight: '700' }}>
+              {isActive ? 'End' : 'Start'}
+            </Text>
+          </LinearGradient>
+        </TouchableOpacity>
+      </Animated.View>
+    );
+  }
 
   return (
     <View style={styles.container}>

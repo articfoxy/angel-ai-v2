@@ -52,10 +52,10 @@ const SESSION_EVENTS = [
 type AngelMode = 'translation' | 'intelligence' | 'hybrid' | 'code';
 
 const ANGEL_MODES: { id: AngelMode; label: string; icon: string; desc: string }[] = [
-  { id: 'translation', label: 'Translation', icon: 'language-outline', desc: 'Smart live translation' },
-  { id: 'intelligence', label: 'Intelligence', icon: 'bulb-outline', desc: 'Insights & coaching' },
-  { id: 'hybrid', label: 'Hybrid', icon: 'git-merge-outline', desc: 'Translate + insights' },
-  { id: 'code', label: 'Code', icon: 'code-slash-outline', desc: 'Coding assistant' },
+  { id: 'translation', label: 'Translation', icon: 'language-outline', desc: 'Real-time translation of foreign languages in your conversations' },
+  { id: 'intelligence', label: 'Intelligence', icon: 'bulb-outline', desc: 'Jargon explainer, meeting notes, coaching, fact-checking & more' },
+  { id: 'hybrid', label: 'Hybrid', icon: 'git-merge-outline', desc: 'Translation + intelligence insights combined in one session' },
+  { id: 'code', label: 'Code', icon: 'code-slash-outline', desc: 'Coding assistant — debug, refactor, architecture & code review' },
 ];
 
 const TRANSLATE_LANGUAGES = [
@@ -690,7 +690,7 @@ export function StartScreen() {
         </View>
       )}
 
-      {/* ═══ TOP: Transcript area ═══ */}
+      {/* ═══ TOP: Transcript / Mode cards ═══ */}
       <View style={styles.activeContainer}>
         {segments.length > 0 || isActive ? (
           <TranscriptView
@@ -699,18 +699,38 @@ export function StartScreen() {
             whisperCards={whisperCards}
           />
         ) : (
-          <View style={styles.idleCenter}>
+          <ScrollView contentContainerStyle={styles.idleContent} showsVerticalScrollIndicator={false}>
+            {/* Mode cards */}
+            <View style={styles.modeGrid}>
+              {ANGEL_MODES.map((m) => (
+                <TouchableOpacity
+                  key={m.id}
+                  style={[styles.modeCard, angelMode === m.id && styles.modeCardActive]}
+                  onPress={() => selectMode(m.id)}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.modeCardHeader}>
+                    <Ionicons name={m.icon as any} size={18} color={angelMode === m.id ? colors.primary : colors.textSecondary} />
+                    <Text style={[styles.modeCardLabel, angelMode === m.id && styles.modeCardLabelActive]}>{m.label}</Text>
+                    {angelMode === m.id && <Ionicons name="checkmark-circle" size={16} color={colors.primary} />}
+                  </View>
+                  <Text style={styles.modeCardDesc}>{m.desc}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {/* Test button */}
             <TouchableOpacity style={styles.testButton} onPress={handleTest} activeOpacity={0.7}>
-              <Ionicons name="flask-outline" size={18} color={colors.primary} />
-              <Text style={styles.testButtonText}>Test with Sample Conversation</Text>
+              <Ionicons name="flask-outline" size={14} color={colors.primary} />
+              <Text style={styles.testButtonText}>Test with Sample</Text>
             </TouchableOpacity>
-          </View>
+          </ScrollView>
         )}
       </View>
 
-      {/* ═══ BOTTOM: Controls panel ═══ */}
+      {/* ═══ BOTTOM: Controls ═══ */}
 
-      {/* Text input — always visible */}
+      {/* Text input */}
       <View style={styles.directiveRow}>
         <TextInput
           style={[styles.directiveInput, directiveFocused && styles.inputFocused]}
@@ -732,7 +752,7 @@ export function StartScreen() {
         )}
       </View>
 
-      {/* Speed toggle */}
+      {/* Speed toggle (active only) */}
       {isActive && (
         <View style={styles.speedRow}>
           {(['normal', 'fast', 'fastest', 'ultra'] as const).map((s) => (
@@ -746,24 +766,6 @@ export function StartScreen() {
               </Text>
             </TouchableOpacity>
           ))}
-        </View>
-      )}
-
-      {/* Mode selector — compact row, always visible */}
-      {!isActive && (
-        <View style={styles.modeBar}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: spacing.sm, paddingHorizontal: spacing.md }}>
-            {ANGEL_MODES.map((m) => (
-              <TouchableOpacity
-                key={m.id}
-                style={[styles.modeChip, angelMode === m.id && styles.modeChipActive]}
-                onPress={() => selectMode(m.id)}
-              >
-                <Ionicons name={m.icon as any} size={14} color={angelMode === m.id ? colors.primary : colors.textSecondary} />
-                <Text style={[styles.modeChipLabel, angelMode === m.id && styles.modeChipLabelActive]}>{m.label}</Text>
-              </TouchableOpacity>
-            ))}
-          </ScrollView>
         </View>
       )}
 
@@ -786,22 +788,19 @@ export function StartScreen() {
         </View>
       )}
 
-      {/* Bottom control bar */}
+      {/* Bottom bar */}
       <View style={styles.bottomControls}>
-        {isActive ? (
+        {isActive && (
           <TouchableOpacity
             onPress={() => setShowGain(!showGain)}
             style={[styles.gainToggle, showGain && { backgroundColor: colors.primaryMuted }]}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
             <Ionicons name="volume-high-outline" size={18} color={showGain ? colors.primary : colors.textSecondary} />
-            <Text style={[styles.gainToggleText, showGain && { color: colors.primary }]}>{gain.toFixed(1)}×</Text>
           </TouchableOpacity>
-        ) : (
-          <View style={{ width: 56 }} />
         )}
-        <AngelButton onPress={handleToggle} isActive={isActive} />
-        {isActive ? (
+        <AngelButton onPress={handleToggle} isActive={isActive} compact />
+        {isActive && (
           <TouchableOpacity
             onPress={handleAngelActivate}
             disabled={angelThinking}
@@ -815,8 +814,6 @@ export function StartScreen() {
             )}
             <Text style={styles.askAngelText}>Ask</Text>
           </TouchableOpacity>
-        ) : (
-          <View style={{ width: 56 }} />
         )}
       </View>
     </View>
@@ -960,8 +957,12 @@ const styles = StyleSheet.create({
   bottomControls: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
+    gap: spacing.lg,
     paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
   gainToggle: {
     flexDirection: 'row',
@@ -997,54 +998,60 @@ const styles = StyleSheet.create({
     width: 32,
     textAlign: 'right',
   },
-  idleCenter: {
-    flex: 1,
+  idleContent: {
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.sm,
+  },
+  modeGrid: {
+    gap: spacing.sm,
+  },
+  modeCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  modeCardActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryMuted,
+  },
+  modeCardHeader: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  modeCardLabel: {
+    color: colors.text,
+    fontSize: fontSize.md,
+    fontWeight: '700',
+    flex: 1,
+  },
+  modeCardLabelActive: {
+    color: colors.primary,
+  },
+  modeCardDesc: {
+    color: colors.textTertiary,
+    fontSize: fontSize.sm,
+    lineHeight: 18,
   },
   testButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.xl,
-    borderRadius: 24,
-    backgroundColor: colors.primaryMuted,
-    borderWidth: 1,
-    borderColor: colors.primary + '40',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    marginTop: spacing.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.full,
+    alignSelf: 'center',
   },
   testButtonText: {
     color: colors.primary,
-    fontSize: fontSize.md,
-    fontWeight: '600',
-  },
-  modeBar: {
-    paddingVertical: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
-  modeChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.full,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  modeChipActive: {
-    borderColor: colors.primary,
-    backgroundColor: colors.primaryMuted,
-  },
-  modeChipLabel: {
-    color: colors.textSecondary,
     fontSize: fontSize.sm,
     fontWeight: '600',
-  },
-  modeChipLabelActive: {
-    color: colors.primary,
   },
   presetGrid: {
     flexDirection: 'row',
