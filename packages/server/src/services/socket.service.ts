@@ -685,7 +685,6 @@ export function setupSocketHandlers(io: Server) {
       }
     });
 
-    // Live instruction update — modifies the Realtime AI system prompt mid-session
     // Text message from user — fed to AI and forces an immediate response
     socket.on('session:message', (data: { text: string }) => {
       if (!realtime || !data?.text?.trim()) return;
