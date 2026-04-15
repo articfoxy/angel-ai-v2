@@ -88,12 +88,61 @@ mkdir -p "$INSTALL_DIR"
 # ── Write worker script ──
 cat > "$INSTALL_DIR/worker.mjs" << 'WORKER_EOF'
 import WebSocket from 'ws';
-import { spawn } from 'child_process';
-import { readFileSync } from 'fs';
+import { spawn, execSync } from 'child_process';
+import { readFileSync, existsSync, readdirSync } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
 
 const config = JSON.parse(readFileSync(new URL('./config.json', import.meta.url), 'utf8'));
 const { serverUrl, authToken, machineName } = config;
 const WS_URL = `${serverUrl.replace(/^http/, 'ws')}/ws/worker?token=${encodeURIComponent(authToken)}&name=${encodeURIComponent(machineName)}`;
+
+// ── Find Claude CLI binary ──
+function findClaude() {
+  // 1. Check PATH
+  try { const p = execSync('which claude 2>/dev/null', { encoding: 'utf8' }).trim(); if (p) return p; } catch {}
+
+  // 2. Claude Desktop app (macOS)
+  const vmDir = join(homedir(), 'Library/Application Support/Claude/claude-code-vm');
+  if (existsSync(vmDir)) {
+    try {
+      const versions = readdirSync(vmDir).sort().reverse();
+      for (const v of versions) {
+        const bin = join(vmDir, v, 'claude');
+        if (existsSync(bin)) return bin;
+      }
+    } catch {}
+  }
+
+  // 3. Common global install paths
+  const candidates = [
+    join(homedir(), '.npm-global/bin/claude'),
+    '/usr/local/bin/claude',
+    '/opt/homebrew/bin/claude',
+  ];
+  for (const c of candidates) { if (existsSync(c)) return c; }
+
+  // 4. nvm global
+  try {
+    const nvmDir = join(homedir(), '.nvm/versions/node');
+    if (existsSync(nvmDir)) {
+      const versions = readdirSync(nvmDir).sort().reverse();
+      for (const v of versions) {
+        const bin = join(nvmDir, v, 'bin/claude');
+        if (existsSync(bin)) return bin;
+      }
+    }
+  } catch {}
+
+  return null;
+}
+
+const CLAUDE_BIN = findClaude();
+if (CLAUDE_BIN) {
+  console.log(`[Angel Worker] Claude CLI: ${CLAUDE_BIN}`);
+} else {
+  console.error('[Angel Worker] ⚠️  Claude CLI not found — tasks will fail until installed');
+}
 
 let ws = null, reconnectAttempts = 0;
 
@@ -121,17 +170,22 @@ function reconnect() {
 }
 
 function handleTask(taskId, prompt, context) {
+  if (!CLAUDE_BIN) {
+    send({ type: 'error', taskId, error: 'Claude CLI not found on this machine. Install Claude Code first.' });
+    return;
+  }
   console.log(`\n[Angel Worker] 📋 Task: ${prompt.slice(0, 120)}`);
   const fullPrompt = context ? `Context:\n${context}\n\nTask: ${prompt}` : prompt;
-  const claude = spawn('claude', ['--print', '--message', fullPrompt], { cwd: process.env.HOME, shell: true, env: { ...process.env } });
+  const claude = spawn(CLAUDE_BIN, ['--print', '--message', fullPrompt], { cwd: homedir(), env: { ...process.env } });
   let result = '', chunk = '';
   claude.stdout.on('data', (d) => { const t = d.toString(); result += t; chunk += t; if (chunk.length >= 500) { send({ type: 'chunk', taskId, text: chunk }); chunk = ''; } });
+  claude.stderr.on('data', () => {}); // Suppress spinner output
   claude.on('close', (code) => {
     if (chunk) send({ type: 'chunk', taskId, text: chunk });
     if (code === 0) { send({ type: 'complete', taskId, result }); console.log(`✅ Done (${result.length} chars)`); }
-    else { send({ type: 'error', taskId, error: result || `Exit ${code}` }); console.log('❌ Failed'); }
+    else { send({ type: 'error', taskId, error: result || `Claude exited with code ${code}` }); console.log('❌ Failed'); }
   });
-  claude.on('error', (err) => send({ type: 'error', taskId, error: `Spawn failed: ${err.message}` }));
+  claude.on('error', (err) => send({ type: 'error', taskId, error: `Failed to start Claude: ${err.message}` }));
 }
 
 function send(msg) { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)); }
