@@ -349,7 +349,7 @@ export function StartScreen() {
     (async () => {
       try {
         const savedMode = await SecureStore.getItemAsync('angel_v2_mode');
-        if (savedMode === 'translation' || savedMode === 'intelligence' || savedMode === 'hybrid') setAngelMode(savedMode);
+        if (savedMode === 'translation' || savedMode === 'intelligence' || savedMode === 'hybrid' || savedMode === 'code') setAngelMode(savedMode as AngelMode);
         const savedLangs = await SecureStore.getItemAsync('angel_v2_translate_languages');
         if (savedLangs) { const p = JSON.parse(savedLangs); if (Array.isArray(p)) setTranslateLangs(p); }
         const savedPresets = await SecureStore.getItemAsync('angel_v2_intelligence_presets');

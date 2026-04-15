@@ -428,13 +428,21 @@ export class RealtimeService {
     try {
       const args = JSON.parse(argsJson);
 
-      if (name === 'save_memory' || name === 'web_search') {
+      if (name === 'save_memory' || name === 'web_search' || name === 'code_task') {
+        const typeMap: Record<string, string> = {
+          save_memory: 'memory_saved',
+          web_search: 'search',
+          code_task: 'code',
+        };
+        const contentMap: Record<string, string> = {
+          save_memory: `Saved: ${args.content || ''}`,
+          web_search: `Searching: ${args.query || ''}`,
+          code_task: `Coding: ${args.prompt || ''}`,
+        };
         this.config.onWhisper({
-          type: name === 'save_memory' ? 'memory_saved' : 'search',
-          content: name === 'save_memory'
-            ? `Saved: ${args.content}`
-            : `Searching: ${args.query}`,
-          action: name,
+          type: typeMap[name] || name,
+          content: contentMap[name] || name,
+          action: name as any,
           actionData: args,
         });
       }

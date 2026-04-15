@@ -167,6 +167,7 @@ class CodeWorkerHub {
 
     this.taskCallbacks.get(taskId)?.onComplete(result);
     this.taskCallbacks.delete(taskId);
+    this.tasks.delete(taskId);
     console.log(`[CodeWorker] Task ${taskId} completed (${result.length} chars)`);
   }
 
@@ -182,6 +183,7 @@ class CodeWorkerHub {
 
     this.taskCallbacks.get(taskId)?.onError(error);
     this.taskCallbacks.delete(taskId);
+    this.tasks.delete(taskId);
     console.log(`[CodeWorker] Task ${taskId} failed: ${error.slice(0, 100)}`);
   }
 

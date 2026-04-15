@@ -56,9 +56,28 @@ export function setupSocketHandlers(io: Server) {
     let ttsEchoTimer: ReturnType<typeof setTimeout> | null = null; // Safety timeout for echo gate
     let testTimer: ReturnType<typeof setTimeout> | null = null;
     let liveDirectives: string[] = [];
-    let sessionOpenaiKey = ''; // Captured at session:start for memory/embedding ops
+    let sessionOpenaiKey = '';
+    let lastMemoryContext = ''; // Cached for atomic prompt rebuilds
     let transcriptsSinceMemoryRefresh = 0;
-    const MEMORY_REFRESH_INTERVAL = 10; // Refresh memory context every N final transcripts
+    const MEMORY_REFRESH_INTERVAL = 10;
+
+    /** Atomically rebuild the Realtime AI prompt from base + memory + directives */
+    function rebuildInstructions(newMemoryContext?: string) {
+      if (!realtime) return;
+      if (newMemoryContext !== undefined) lastMemoryContext = newMemoryContext;
+      // Get base instructions (everything before dynamic sections)
+      const base = realtime.instructions
+        .split('\n\n## WHAT YOU REMEMBER')[0]
+        .split('\n\n## LIVE DIRECTIVES')[0];
+      const mem = lastMemoryContext.trim()
+        ? `\n\n## WHAT YOU REMEMBER ABOUT THE USER\n${lastMemoryContext.trim()}`
+        : '';
+      const dir = liveDirectives.length > 0
+        ? '\n\n## LIVE DIRECTIVES (from the user during this session)\n' +
+          liveDirectives.map((d, i) => `${i + 1}. ${d}`).join('\n')
+        : '';
+      realtime.updateInstructions(base + mem + dir);
+    }
 
     function clearAllTimers() {
       if (sessionTimer) { clearTimeout(sessionTimer); sessionTimer = null; }
@@ -461,15 +480,7 @@ export function setupSocketHandlers(io: Server) {
                   const retrieval = new RetrievalService(sessionOpenaiKey);
                   const freshMemory = await retrieval.buildContext(uid, recentText, 2000);
                   if (realtime && freshMemory.length > 50) {
-                    const baseInstructions = realtime.instructions.split('\n## WHAT YOU REMEMBER')[0];
-                    const memSection = `\n## WHAT YOU REMEMBER ABOUT THE USER\n${freshMemory.trim()}\n`;
-                    realtime.updateInstructions(
-                      baseInstructions.split('\n\n## LIVE DIRECTIVES')[0] + memSection +
-                      (liveDirectives.length > 0
-                        ? '\n\n## LIVE DIRECTIVES (from the user during this session)\n' +
-                          liveDirectives.map((d, i) => `${i + 1}. ${d}`).join('\n')
-                        : '')
-                    );
+                    rebuildInstructions(freshMemory);
                     console.log(`[session] Memory context refreshed (${freshMemory.length} chars)`);
                   }
                 } catch (e) {
@@ -673,12 +684,7 @@ export function setupSocketHandlers(io: Server) {
       const directive = data.text.trim();
       liveDirectives.push(directive);
       console.log(`[session] Live directive: "${directive}"`);
-
-      // Rebuild full instructions with the live directives appended
-      const baseInstructions = realtime.instructions;
-      const liveSection = '\n\n## LIVE DIRECTIVES (from the user during this session)\n' +
-        liveDirectives.map((d, i) => `${i + 1}. ${d}`).join('\n');
-      realtime.updateInstructions(baseInstructions.split('\n\n## LIVE DIRECTIVES')[0] + liveSection);
+      rebuildInstructions(); // Atomic rebuild preserves memory + adds all directives
     });
 
     // TTS client control events

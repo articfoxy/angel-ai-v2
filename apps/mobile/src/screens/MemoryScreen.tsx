@@ -277,7 +277,7 @@ export function MemoryScreen() {
                 <View style={styles.reflectionContent}>
                   <Text style={styles.reflectionText}>{reflection.content}</Text>
                   <Text style={styles.reflectionMeta}>
-                    Based on {reflection.sourceMemories.length} memories
+                    Based on {reflection.sourceMemories?.length || 0} memories
                   </Text>
                 </View>
               </View>
