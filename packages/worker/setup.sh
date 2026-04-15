@@ -13,6 +13,7 @@ set -e
 ANGEL_SERVER="https://server-production-ff34.up.railway.app"
 MACHINE_NAME=""
 AUTH_TOKEN=""
+PROJECT_DIR=""
 INSTALL_DIR="$HOME/.angel-worker"
 
 # ── Parse args ──
@@ -21,6 +22,7 @@ while [[ $# -gt 0 ]]; do
     --token) AUTH_TOKEN="$2"; shift 2 ;;
     --name) MACHINE_NAME="$2"; shift 2 ;;
     --server) ANGEL_SERVER="$2"; shift 2 ;;
+    --project) PROJECT_DIR="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
@@ -94,7 +96,8 @@ import { homedir } from 'os';
 import { join } from 'path';
 
 const config = JSON.parse(readFileSync(new URL('./config.json', import.meta.url), 'utf8'));
-const { serverUrl, authToken, machineName } = config;
+const { serverUrl, authToken, machineName, projectDir } = config;
+const CWD = projectDir && existsSync(projectDir) ? projectDir : homedir();
 const WS_URL = `${serverUrl.replace(/^http/, 'ws')}/ws/worker?token=${encodeURIComponent(authToken)}&name=${encodeURIComponent(machineName)}`;
 
 // ── Find Claude CLI binary ──
@@ -175,8 +178,9 @@ function handleTask(taskId, prompt, context) {
     return;
   }
   console.log(`\n[Angel Worker] 📋 Task: ${prompt.slice(0, 120)}`);
+  console.log(`[Angel Worker] CWD: ${CWD}, Model: opus`);
   const fullPrompt = context ? `Context:\n${context}\n\nTask: ${prompt}` : prompt;
-  const claude = spawn(CLAUDE_BIN, ['--print', '--message', fullPrompt], { cwd: homedir(), env: { ...process.env } });
+  const claude = spawn(CLAUDE_BIN, ['--print', '--model', 'opus', '--message', fullPrompt], { cwd: CWD, env: { ...process.env } });
   let result = '', chunk = '';
   claude.stdout.on('data', (d) => { const t = d.toString(); result += t; chunk += t; if (chunk.length >= 500) { send({ type: 'chunk', taskId, text: chunk }); chunk = ''; } });
   claude.stderr.on('data', () => {}); // Suppress spinner output
@@ -198,7 +202,8 @@ cat > "$INSTALL_DIR/config.json" << EOF
 {
   "serverUrl": "$ANGEL_SERVER",
   "authToken": "$AUTH_TOKEN",
-  "machineName": "$MACHINE_NAME"
+  "machineName": "$MACHINE_NAME",
+  "projectDir": "${PROJECT_DIR:-$HOME}"
 }
 EOF
 
