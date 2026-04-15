@@ -109,7 +109,6 @@ export function StartScreen() {
   const [codePresets, setCodePresets] = useState<string[]>(['debug', 'explain']);
   const [customInstructions, setCustomInstructions] = useState('');
   const [liveDirective, setLiveDirective] = useState('');
-  const [instructionsFocused, setInstructionsFocused] = useState(false);
   const [directiveFocused, setDirectiveFocused] = useState(false);
   const [ttsSpeed, setTtsSpeed] = useState<'normal' | 'fast' | 'fastest' | 'ultra'>('normal');
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
