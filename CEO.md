@@ -34,7 +34,8 @@ Angel AI sits in your AirPods during every conversation. It hears everything, re
 | Mobile | Expo (React Native) | iOS app, AirPods audio |
 | Server | Express + Socket.io | Real-time relay, orchestration |
 | STT | Deepgram Nova-3 | Speech-to-text, multilingual, diarization |
-| AI Brain | OpenAI Realtime API | Whisper generation, function calling |
+| AI Brain (default) | OpenAI Realtime API | Whisper generation for Translation/Intelligence/Hybrid |
+| AI Brain (Code) | Claude Opus 4.6 API | Primary brain for Code mode, falls back to OpenAI if no Anthropic key |
 | TTS | Cartesia Sonic | Text-to-speech via AirPods |
 | Search | Perplexity Sonar | Real-time web search with citations |
 | Memory | PostgreSQL + pgvector | 6-layer memory with vector similarity |
@@ -48,7 +49,7 @@ Angel AI sits in your AirPods during every conversation. It hears everything, re
 | **Translation** | Smart-translates foreign language speech | Every 1 line (80ms endpointing) | Business meetings with non-English speakers |
 | **Intelligence** | Jargon, meeting notes, coaching, fact-checking, sales, learning | Every 3 lines (150ms endpointing) | Any professional conversation |
 | **Hybrid** | Translation + intelligence combined | Every 2 lines | Mixed-language meetings with insights |
-| **Code** | Coding assistant + Claude Code dispatch | Every 2 lines | Technical discussions, pair programming |
+| **Code** | Coding assistant + Claude Code dispatch | Every 2 lines | Technical discussions, pair programming. **Uses Claude Opus 4.6 as brain** (not OpenAI) |
 
 ## Memory System (6 Layers)
 

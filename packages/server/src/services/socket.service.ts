@@ -9,6 +9,7 @@ import { ExtractionService } from './memory/extraction.service';
 import { runPostSessionReflection } from './memory/reflection.service';
 import { RetrievalService } from './memory/retrieval.service';
 import { PerplexityService } from './perplexity.service';
+import { ClaudeCodeBrain } from './claude-brain.service';
 import { codeWorkerHub } from './codeworker.service';
 import { CartesiaTTSService } from './tts.service';
 
@@ -46,7 +47,7 @@ export function setupSocketHandlers(io: Server) {
   io.on('connection', (socket: AuthenticatedSocket) => {
     console.log(`Client connected: ${socket.userId}`);
     let deepgram: DeepgramService | null = null;
-    let realtime: RealtimeService | null = null;
+    let realtime: RealtimeService | ClaudeCodeBrain | null = null;
     let transcriptBuffer: string[] = [];
     let sessionTimer: ReturnType<typeof setTimeout> | null = null;
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -357,25 +358,46 @@ export function setupSocketHandlers(io: Server) {
           console.warn('[session] Memory retrieval skipped:', (memErr as any)?.message?.slice(0, 80));
         }
 
-        console.log(`[session] Mode: ${sessionMode}, Language: ${ownerLanguage}, Translate: [${translateLanguages}], Presets: [${intPresets}]`);
-        realtime = new RealtimeService({
-          apiKey: openaiKey,
-          ownerLanguage,
-          mode: sessionMode,
-          instructions: buildAngelInstructions(ownerLanguage, sessionMode, translateLanguages, intPresets, cdPresets, customInstr, memoryContext),
-          onWhisper: (whisper) => {
-            handleRealtimeWhisper(userId, whisper).catch((err) => {
-              console.error('[Realtime] Whisper handling error:', err);
-            });
-          },
-          onError: (error) => {
-            console.error('[Realtime] Error:', error);
-          },
-          onStatus: (status) => {
-            console.log(`[Realtime] Status: ${status}`);
-            socket.emit('realtime:status', { status });
-          },
-        });
+        const angelInstructions = buildAngelInstructions(ownerLanguage, sessionMode, translateLanguages, intPresets, cdPresets, customInstr, memoryContext);
+        const whisperHandler = (whisper: any) => {
+          handleRealtimeWhisper(userId, whisper).catch((err) => {
+            console.error('[Brain] Whisper handling error:', err);
+          });
+        };
+        const errorHandler = (error: string) => console.error('[Brain] Error:', error);
+        const statusHandler = (status: string) => {
+          console.log(`[Brain] Status: ${status}`);
+          socket.emit('realtime:status', { status });
+        };
+
+        // Code mode: use Claude Opus as primary brain, fallback to OpenAI Realtime
+        const anthropicKey = payload.byok?.provider === 'anthropic' && payload.byok?.apiKey
+          ? payload.byok.apiKey
+          : process.env.ANTHROPIC_API_KEY || '';
+
+        if (sessionMode === 'code' && anthropicKey) {
+          console.log(`[session] Using Claude Opus brain for Code mode`);
+          realtime = new ClaudeCodeBrain({
+            apiKey: anthropicKey,
+            ownerLanguage,
+            mode: sessionMode,
+            instructions: angelInstructions,
+            onWhisper: whisperHandler,
+            onError: errorHandler,
+            onStatus: statusHandler as any,
+          });
+        } else {
+          console.log(`[session] Using OpenAI Realtime brain (mode: ${sessionMode})`);
+          realtime = new RealtimeService({
+            apiKey: openaiKey,
+            ownerLanguage,
+            mode: sessionMode,
+            instructions: angelInstructions,
+            onWhisper: whisperHandler,
+            onError: errorHandler,
+            onStatus: statusHandler as any,
+          });
+        }
 
         try {
           await realtime.connect();
