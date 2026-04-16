@@ -181,8 +181,10 @@ server.on('upgrade', (req, socket, head) => {
         } catch {}
       });
 
-      ws.on('close', () => codeWorkerHub.removeWorker(workerId));
-      ws.on('error', () => codeWorkerHub.removeWorker(workerId));
+      let removed = false;
+      const cleanupWorker = () => { if (!removed) { removed = true; codeWorkerHub.removeWorker(workerId); } };
+      ws.on('close', cleanupWorker);
+      ws.on('error', cleanupWorker);
 
       ws.send(JSON.stringify({ type: 'registered', workerId, name: machineName }));
     });

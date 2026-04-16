@@ -200,7 +200,7 @@ export function setupSocketHandlers(io: Server) {
                 id: uuid(),
                 type: 'code',
                 content: '✅ Task completed',
-                detail: result.slice(0, 500),
+                detail: result.slice(0, 2000),
                 createdAt: new Date().toISOString(),
               });
             },

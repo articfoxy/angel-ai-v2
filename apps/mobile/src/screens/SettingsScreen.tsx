@@ -87,7 +87,7 @@ export function SettingsScreen() {
 
   const version = Constants.expoConfig?.version || '2.0.0';
   const buildNumber = Constants.expoConfig?.ios?.buildNumber || '';
-  const [workers, setWorkers] = useState<{ id: string; name: string; busy: boolean }[]>([]);
+  const [workers, setWorkers] = useState<{ id: string; name: string; busy: boolean; projects?: string[] }[]>([]);
   const [showSetup, setShowSetup] = useState(false);
   const [copiedToken, setCopiedToken] = useState(false);
 
@@ -101,7 +101,7 @@ export function SettingsScreen() {
   const copySetupCommand = React.useCallback(async () => {
     const token = await getStoredToken();
     if (!token) { Alert.alert('Error', 'Not logged in'); return; }
-    const cmd = `bash <(curl -fsSL https://raw.githubusercontent.com/articfoxy/angel-ai-v2/main/packages/worker/setup.sh) --token ${token}`;
+    const cmd = `bash <(curl -fsSL https://raw.githubusercontent.com/articfoxy/angel-ai-v2/main/packages/worker/setup.sh) --token ${token} --project /path/to/your/project`;
     await ExpoClipboard.setStringAsync(cmd);
     setCopiedToken(true);
     setTimeout(() => setCopiedToken(false), 3000);
@@ -751,7 +751,12 @@ export function SettingsScreen() {
                       size={16}
                       color={w.busy ? colors.warning : colors.success}
                     />
-                    <Text style={styles.workerName}>{w.name}</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.workerName}>{w.name}</Text>
+                      {w.projects && w.projects.length > 0 && (
+                        <Text style={{ color: colors.textTertiary, fontSize: 11 }}>{w.projects.join(', ')}</Text>
+                      )}
+                    </View>
                     <Text style={styles.workerStatus}>{w.busy ? 'Busy' : 'Ready'}</Text>
                   </View>
                 ))}
@@ -791,7 +796,7 @@ export function SettingsScreen() {
                   borderColor: colors.border,
                 }}>
                   <Text style={{ color: colors.primary, fontSize: 11, fontFamily: 'monospace' }} numberOfLines={3}>
-                    bash {'<'}(curl -fsSL https://raw.githubusercontent.com/articfoxy/angel-ai-v2/main/packages/worker/setup.sh) --token YOUR_TOKEN
+                    bash {'<'}(curl -fsSL ...setup.sh) --token YOUR_TOKEN --project /path/to/project
                   </Text>
                 </View>
                 <TouchableOpacity

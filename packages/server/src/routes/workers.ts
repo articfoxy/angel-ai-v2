@@ -18,6 +18,12 @@ workersRouter.get('/', (req: AuthRequest, res: Response) => {
   res.json({ success: true, data: workers });
 });
 
+// List all available projects across connected workers
+workersRouter.get('/projects', (req: AuthRequest, res: Response) => {
+  const projects = codeWorkerHub.getProjects(req.userId!);
+  res.json({ success: true, data: projects });
+});
+
 // Dispatch a task to a worker
 workersRouter.post('/task', async (req: AuthRequest, res: Response) => {
   const { prompt, context, workerId, project } = req.body;
