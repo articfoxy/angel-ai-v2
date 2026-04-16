@@ -78,7 +78,9 @@ Voice: "Angel, build a login component"
   → Results stream back → whisper cards show progress
 ```
 
-**Setup**: Run one command on any machine → worker installs to ~/.angel-worker/ → auto-connects to server.
+**Multi-project dispatch**: Worker registers all git repos on the machine. Tasks auto-route to the correct project based on conversation context (mentions "angel-ai" → runs in angel-ai-v2 dir). User can also explicitly say "in my angel project, build X".
+
+**Setup**: Run one command on any machine → worker installs to ~/.angel-worker/ → auto-connects to server. Add `--project /path` to set default project. Worker auto-scans for all registered projects.
 
 ## Key Features
 
