@@ -216,7 +216,7 @@ export function setupSocketHandlers(io: Server) {
           if (task) {
             whisper.detail = `Sent to worker. Task ID: ${task.taskId}`;
           } else {
-            whisper.detail = 'All workers are busy. Task queued.';
+            whisper.detail = 'All workers are busy. Try again in a moment.';
           }
         } else {
           whisper.detail = 'No connected workers. Run the Angel worker agent on your machine.';

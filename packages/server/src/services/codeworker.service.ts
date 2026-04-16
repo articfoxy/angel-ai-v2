@@ -64,6 +64,7 @@ class CodeWorkerHub {
           task.result = 'Worker disconnected';
           this.taskCallbacks.get(worker.currentTaskId)?.onError('Worker disconnected');
           this.taskCallbacks.delete(worker.currentTaskId);
+          this.tasks.delete(worker.currentTaskId);
         }
       }
       this.workers.delete(workerId);
@@ -92,14 +93,15 @@ class CodeWorkerHub {
   }
 
   /** Get all connected workers for a user. */
-  getWorkers(userId: string): { id: string; name: string; busy: boolean; connectedAt: string }[] {
-    const result: { id: string; name: string; busy: boolean; connectedAt: string }[] = [];
+  getWorkers(userId: string): { id: string; name: string; busy: boolean; projects: string[]; connectedAt: string }[] {
+    const result: { id: string; name: string; busy: boolean; projects: string[]; connectedAt: string }[] = [];
     for (const w of this.workers.values()) {
       if (w.userId === userId) {
         result.push({
           id: w.id,
           name: w.name,
           busy: !!w.currentTaskId,
+          projects: w.projects,
           connectedAt: w.connectedAt.toISOString(),
         });
       }

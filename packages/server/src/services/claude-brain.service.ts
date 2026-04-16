@@ -60,6 +60,7 @@ const TOOLS = [
       properties: {
         prompt: { type: 'string', description: 'The coding task description' },
         context: { type: 'string', description: 'Relevant conversation context' },
+        project: { type: 'string', description: 'Project name to run in (auto-detected if not specified)' },
       },
       required: ['prompt'],
     },
@@ -275,7 +276,7 @@ export class ClaudeCodeBrain {
         },
         body: JSON.stringify({
           model: CLAUDE_MODEL,
-          max_tokens: 1024,
+          max_tokens: 2048,
           temperature: 0.6,
           system: this.config.instructions,
           tools: TOOLS,

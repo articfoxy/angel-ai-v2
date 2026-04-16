@@ -87,7 +87,7 @@ echo ""
 # ── Create install directory ──
 mkdir -p "$INSTALL_DIR"
 
-# ── Write worker script ──
+# ── Write worker script (synced with ~/.angel-worker/worker.mjs) ──
 cat > "$INSTALL_DIR/worker.mjs" << 'WORKER_EOF'
 import WebSocket from 'ws';
 import { spawn, execSync } from 'child_process';
@@ -96,91 +96,61 @@ import { homedir } from 'os';
 import { join } from 'path';
 
 const config = JSON.parse(readFileSync(new URL('./config.json', import.meta.url), 'utf8'));
-const { serverUrl, authToken, machineName, projectDir } = config;
-const CWD = projectDir && existsSync(projectDir) ? projectDir : homedir();
+const { serverUrl, authToken, machineName, defaultProject, projects } = config;
 const WS_URL = `${serverUrl.replace(/^http/, 'ws')}/ws/worker?token=${encodeURIComponent(authToken)}&name=${encodeURIComponent(machineName)}`;
 
-// ── Find Claude CLI binary ──
+const projectMap = {};
+for (const p of (projects || [])) {
+  if (existsSync(p.path)) { projectMap[p.name.toLowerCase()] = p.path; projectMap[p.path.split('/').pop().toLowerCase()] = p.path; }
+}
+const DEFAULT_CWD = defaultProject && existsSync(defaultProject) ? defaultProject : homedir();
+
 function findClaude() {
-  // 1. Check PATH
   try { const p = execSync('which claude 2>/dev/null', { encoding: 'utf8' }).trim(); if (p) return p; } catch {}
-
-  // 2. Claude Desktop native app (macOS Mach-O — NOT the VM Linux binary)
   const codeDir = join(homedir(), 'Library/Application Support/Claude/claude-code');
-  if (existsSync(codeDir)) {
-    try {
-      const versions = readdirSync(codeDir).sort().reverse();
-      for (const v of versions) {
-        const bin = join(codeDir, v, 'claude.app/Contents/MacOS/claude');
-        if (existsSync(bin)) return bin;
-      }
-    } catch {}
-  }
-
-  // 3. Common global install paths
-  const candidates = [
-    join(homedir(), '.npm-global/bin/claude'),
-    '/usr/local/bin/claude',
-    '/opt/homebrew/bin/claude',
-  ];
-  for (const c of candidates) { if (existsSync(c)) return c; }
-
-  // 4. nvm global
-  try {
-    const nvmDir = join(homedir(), '.nvm/versions/node');
-    if (existsSync(nvmDir)) {
-      const versions = readdirSync(nvmDir).sort().reverse();
-      for (const v of versions) {
-        const bin = join(nvmDir, v, 'bin/claude');
-        if (existsSync(bin)) return bin;
-      }
-    }
-  } catch {}
-
+  if (existsSync(codeDir)) { try { const vs = readdirSync(codeDir).sort().reverse(); for (const v of vs) { const b = join(codeDir, v, 'claude.app/Contents/MacOS/claude'); if (existsSync(b)) return b; } } catch {} }
+  for (const c of [join(homedir(), '.npm-global/bin/claude'), '/usr/local/bin/claude', '/opt/homebrew/bin/claude']) { if (existsSync(c)) return c; }
+  try { const nd = join(homedir(), '.nvm/versions/node'); if (existsSync(nd)) { const vs = readdirSync(nd).sort().reverse(); for (const v of vs) { const b = join(nd, v, 'bin/claude'); if (existsSync(b)) return b; } } } catch {}
   return null;
 }
 
-const CLAUDE_BIN = findClaude();
-if (CLAUDE_BIN) {
-  console.log(`[Angel Worker] Claude CLI: ${CLAUDE_BIN}`);
-} else {
-  console.error('[Angel Worker] ⚠️  Claude CLI not found — tasks will fail until installed');
+function detectProject(prompt, context) {
+  const text = `${prompt} ${context || ''}`.toLowerCase();
+  for (const [alias, path] of Object.entries(projectMap)) { if (text.includes(alias)) return path; }
+  return DEFAULT_CWD;
 }
 
-let ws = null, reconnectAttempts = 0;
+const CLAUDE_BIN = findClaude();
+console.log(`[Angel Worker] Claude: ${CLAUDE_BIN || 'NOT FOUND'}`);
+console.log(`[Angel Worker] Projects: ${(projects || []).map(p => p.name).join(', ') || 'none'}`);
+console.log(`[Angel Worker] Default: ${DEFAULT_CWD}`);
 
+let ws = null, reconnectAttempts = 0;
 function connect() {
   console.log(`[Angel Worker] Connecting to ${serverUrl} as "${machineName}"...`);
   ws = new WebSocket(WS_URL);
-  ws.on('open', () => { reconnectAttempts = 0; console.log('[Angel Worker] ✅ Connected! Waiting for tasks...'); });
+  ws.on('open', () => { reconnectAttempts = 0; console.log('[Angel Worker] ✅ Connected!'); });
   ws.on('message', (data) => {
     try {
       const msg = JSON.parse(data.toString());
-      if (msg.type === 'registered') console.log(`[Angel Worker] Registered as ${msg.workerId}`);
-      else if (msg.type === 'task') handleTask(msg.taskId, msg.prompt, msg.context);
+      if (msg.type === 'registered') { console.log(`[Angel Worker] Registered as ${msg.workerId}`); send({ type: 'projects', projects: (projects || []).map(p => p.name) }); }
+      else if (msg.type === 'task') handleTask(msg.taskId, msg.prompt, msg.context, msg.project);
     } catch {}
   });
   ws.on('close', () => { console.log('[Angel Worker] Disconnected'); reconnect(); });
   ws.on('error', (err) => console.error('[Angel Worker] Error:', err.message));
 }
+function reconnect() { if (reconnectAttempts >= 20) process.exit(1); reconnectAttempts++; setTimeout(connect, Math.min(1000 * Math.pow(2, reconnectAttempts), 30000)); }
 
-function reconnect() {
-  if (reconnectAttempts >= 20) { console.error('Max reconnects reached. Exiting.'); process.exit(1); }
-  reconnectAttempts++;
-  const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-  console.log(`[Angel Worker] Reconnecting in ${delay/1000}s...`);
-  setTimeout(connect, delay);
-}
+function handleTask(taskId, prompt, context, requestedProject) {
+  if (!CLAUDE_BIN) { send({ type: 'error', taskId, error: 'Claude CLI not found' }); return; }
+  let cwd = DEFAULT_CWD;
+  if (requestedProject && projectMap[requestedProject.toLowerCase()]) cwd = projectMap[requestedProject.toLowerCase()];
+  else cwd = detectProject(prompt, context);
 
-function handleTask(taskId, prompt, context) {
-  if (!CLAUDE_BIN) {
-    send({ type: 'error', taskId, error: 'Claude CLI not found on this machine. Install Claude Code first.' });
-    return;
-  }
   console.log(`\n[Angel Worker] 📋 Task: ${prompt.slice(0, 120)}`);
-  console.log(`[Angel Worker] 📂 Project: ${cwd}, Model: opus`);
+  console.log(`[Angel Worker] 📂 Project: ${cwd}`);
 
-  // Load shared memory context if available
   const memoryFile = join(cwd, '.claude', 'angel-worker-context.md');
   let sharedMemory = '';
   try { if (existsSync(memoryFile)) sharedMemory = readFileSync(memoryFile, 'utf8'); } catch {}
@@ -190,33 +160,45 @@ function handleTask(taskId, prompt, context) {
   if (context) fullPrompt += `## Conversation Context:\n${context}\n\n`;
   fullPrompt += `## Task:\n${prompt}\n\nAfter completing the task, update .claude/angel-worker-context.md with a brief summary of what you did.`;
 
-  // Pipe prompt via stdin to avoid command-line length limits and escaping issues
   const claude = spawn(CLAUDE_BIN, ['-p', '--model', 'opus', '--dangerously-skip-permissions'], { cwd, env: { ...process.env } });
   claude.stdin.write(fullPrompt);
   claude.stdin.end();
   let result = '', chunk = '';
   claude.stdout.on('data', (d) => { const t = d.toString(); result += t; chunk += t; if (chunk.length >= 500) { send({ type: 'chunk', taskId, text: chunk }); chunk = ''; } });
-  claude.stderr.on('data', () => {}); // Suppress spinner output
-  claude.on('close', (code) => {
-    if (chunk) send({ type: 'chunk', taskId, text: chunk });
-    if (code === 0) { send({ type: 'complete', taskId, result }); console.log(`✅ Done (${result.length} chars)`); }
-    else { send({ type: 'error', taskId, error: result || `Claude exited with code ${code}` }); console.log('❌ Failed'); }
-  });
-  claude.on('error', (err) => send({ type: 'error', taskId, error: `Failed to start Claude: ${err.message}` }));
+  claude.stderr.on('data', (d) => { const t = d.toString(); if (t.includes('error') || t.includes('Error')) console.error(`[stderr] ${t.trim()}`); });
+  claude.on('close', (code) => { if (chunk) send({ type: 'chunk', taskId, text: chunk }); if (code === 0) { send({ type: 'complete', taskId, result }); console.log(`✅ Done (${result.length} chars)`); } else { send({ type: 'error', taskId, error: result || `Exit ${code}` }); console.log('❌ Failed'); } });
+  claude.on('error', (err) => send({ type: 'error', taskId, error: `Spawn failed: ${err.message}` }));
 }
 
 function send(msg) { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)); }
 connect();
-process.on('SIGINT', () => { console.log('\nShutting down...'); ws?.close(); process.exit(0); });
+process.on('SIGINT', () => { ws?.close(); process.exit(0); });
 WORKER_EOF
 
 # ── Write config ──
+# Auto-scan for git repos to populate projects list
+PROJECTS_JSON="[]"
+if command -v find &>/dev/null; then
+  REPOS=$(find "$HOME" -maxdepth 3 -name ".git" -type d 2>/dev/null | sed 's/\/.git$//' | grep -v node_modules | grep -v '.Trash' | sort)
+  if [ -n "$REPOS" ]; then
+    PROJECTS_JSON="["
+    FIRST=true
+    for repo in $REPOS; do
+      name=$(basename "$repo")
+      if [ "$FIRST" = true ]; then FIRST=false; else PROJECTS_JSON+=","; fi
+      PROJECTS_JSON+="{\"name\":\"$name\",\"path\":\"$repo\"}"
+    done
+    PROJECTS_JSON+="]"
+  fi
+fi
+
 cat > "$INSTALL_DIR/config.json" << EOF
 {
   "serverUrl": "$ANGEL_SERVER",
   "authToken": "$AUTH_TOKEN",
   "machineName": "$MACHINE_NAME",
-  "projectDir": "${PROJECT_DIR:-$HOME}"
+  "defaultProject": "${PROJECT_DIR:-$HOME}",
+  "projects": $PROJECTS_JSON
 }
 EOF
 
