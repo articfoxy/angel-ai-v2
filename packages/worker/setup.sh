@@ -105,13 +105,13 @@ function findClaude() {
   // 1. Check PATH
   try { const p = execSync('which claude 2>/dev/null', { encoding: 'utf8' }).trim(); if (p) return p; } catch {}
 
-  // 2. Claude Desktop app (macOS)
-  const vmDir = join(homedir(), 'Library/Application Support/Claude/claude-code-vm');
-  if (existsSync(vmDir)) {
+  // 2. Claude Desktop native app (macOS Mach-O — NOT the VM Linux binary)
+  const codeDir = join(homedir(), 'Library/Application Support/Claude/claude-code');
+  if (existsSync(codeDir)) {
     try {
-      const versions = readdirSync(vmDir).sort().reverse();
+      const versions = readdirSync(codeDir).sort().reverse();
       for (const v of versions) {
-        const bin = join(vmDir, v, 'claude');
+        const bin = join(codeDir, v, 'claude.app/Contents/MacOS/claude');
         if (existsSync(bin)) return bin;
       }
     } catch {}
@@ -180,7 +180,7 @@ function handleTask(taskId, prompt, context) {
   console.log(`\n[Angel Worker] 📋 Task: ${prompt.slice(0, 120)}`);
   console.log(`[Angel Worker] CWD: ${CWD}, Model: opus`);
   const fullPrompt = context ? `Context:\n${context}\n\nTask: ${prompt}` : prompt;
-  const claude = spawn(CLAUDE_BIN, ['--print', '--model', 'opus', '--message', fullPrompt], { cwd: CWD, env: { ...process.env } });
+  const claude = spawn(CLAUDE_BIN, ['-p', '--model', 'opus', '--dangerously-skip-permissions', fullPrompt], { cwd: CWD, env: { ...process.env } });
   let result = '', chunk = '';
   claude.stdout.on('data', (d) => { const t = d.toString(); result += t; chunk += t; if (chunk.length >= 500) { send({ type: 'chunk', taskId, text: chunk }); chunk = ''; } });
   claude.stderr.on('data', () => {}); // Suppress spinner output
