@@ -610,7 +610,7 @@ export function SettingsScreen() {
 
           <View style={styles.card}>
             <Text style={styles.cardLabel}>Microphone Input</Text>
-            <Text style={styles.cardDesc}>Where Angel listens from.</Text>
+            <Text style={styles.cardDesc}>Where Angel listens from. Takes effect on next session.</Text>
             <View style={styles.presetGrid}>
               {([
                 { key: 'auto' as const, label: 'Auto', icon: 'swap-horizontal-outline' },
@@ -641,7 +641,7 @@ export function SettingsScreen() {
 
           <View style={styles.card}>
             <Text style={styles.cardLabel}>Audio Output</Text>
-            <Text style={styles.cardDesc}>Where Angel speaks to you.</Text>
+            <Text style={styles.cardDesc}>Where Angel speaks to you. Takes effect on next session.</Text>
             <View style={styles.presetGrid}>
               {([
                 { key: 'auto' as const, label: 'Auto', icon: 'swap-horizontal-outline' },
