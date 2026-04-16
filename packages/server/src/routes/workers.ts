@@ -20,7 +20,7 @@ workersRouter.get('/', (req: AuthRequest, res: Response) => {
 
 // Dispatch a task to a worker
 workersRouter.post('/task', async (req: AuthRequest, res: Response) => {
-  const { prompt, context, workerId } = req.body;
+  const { prompt, context, workerId, project } = req.body;
   if (!prompt) {
     res.status(400).json({ error: 'prompt is required' });
     return;
@@ -31,7 +31,7 @@ workersRouter.post('/task', async (req: AuthRequest, res: Response) => {
     return;
   }
 
-  const task = codeWorkerHub.dispatchTask(req.userId!, prompt, context || '', workerId);
+  const task = codeWorkerHub.dispatchTask(req.userId!, prompt, context || '', workerId, project);
   if (!task) {
     res.status(503).json({ error: 'No available workers. All workers are busy.' });
     return;
