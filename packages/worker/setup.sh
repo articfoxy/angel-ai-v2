@@ -178,9 +178,22 @@ function handleTask(taskId, prompt, context) {
     return;
   }
   console.log(`\n[Angel Worker] 📋 Task: ${prompt.slice(0, 120)}`);
-  console.log(`[Angel Worker] CWD: ${CWD}, Model: opus`);
-  const fullPrompt = context ? `Context:\n${context}\n\nTask: ${prompt}` : prompt;
-  const claude = spawn(CLAUDE_BIN, ['-p', '--model', 'opus', '--dangerously-skip-permissions', fullPrompt], { cwd: CWD, env: { ...process.env } });
+  console.log(`[Angel Worker] 📂 Project: ${cwd}, Model: opus`);
+
+  // Load shared memory context if available
+  const memoryFile = join(cwd, '.claude', 'angel-worker-context.md');
+  let sharedMemory = '';
+  try { if (existsSync(memoryFile)) sharedMemory = readFileSync(memoryFile, 'utf8'); } catch {}
+
+  let fullPrompt = '';
+  if (sharedMemory) fullPrompt += `## Shared Project Context:\n${sharedMemory}\n\n`;
+  if (context) fullPrompt += `## Conversation Context:\n${context}\n\n`;
+  fullPrompt += `## Task:\n${prompt}\n\nAfter completing the task, update .claude/angel-worker-context.md with a brief summary of what you did.`;
+
+  // Pipe prompt via stdin to avoid command-line length limits and escaping issues
+  const claude = spawn(CLAUDE_BIN, ['-p', '--model', 'opus', '--dangerously-skip-permissions'], { cwd, env: { ...process.env } });
+  claude.stdin.write(fullPrompt);
+  claude.stdin.end();
   let result = '', chunk = '';
   claude.stdout.on('data', (d) => { const t = d.toString(); result += t; chunk += t; if (chunk.length >= 500) { send({ type: 'chunk', taskId, text: chunk }); chunk = ''; } });
   claude.stderr.on('data', () => {}); // Suppress spinner output
