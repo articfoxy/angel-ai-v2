@@ -21,9 +21,10 @@ interface ConnectedWorker {
   id: string;
   name: string;
   userId: string;
-  ws: any; // WebSocket instance
+  ws: any;
   connectedAt: Date;
   currentTaskId: string | null;
+  projects: string[]; // Available project names on this machine
 }
 
 class CodeWorkerHub {
@@ -45,6 +46,7 @@ class CodeWorkerHub {
       ws,
       connectedAt: new Date(),
       currentTaskId: null,
+      projects: [],
     });
     console.log(`[CodeWorker] Worker registered: ${name} (${id}) for user ${userId}`);
     return id;
@@ -69,6 +71,26 @@ class CodeWorkerHub {
     }
   }
 
+  /** Update the project list for a worker. */
+  setWorkerProjects(workerId: string, projects: string[]): void {
+    const worker = this.workers.get(workerId);
+    if (worker) {
+      worker.projects = projects;
+      console.log(`[CodeWorker] ${worker.name} projects: ${projects.join(', ')}`);
+    }
+  }
+
+  /** Get all available projects across all workers for a user. */
+  getProjects(userId: string): string[] {
+    const projects = new Set<string>();
+    for (const w of this.workers.values()) {
+      if (w.userId === userId) {
+        for (const p of w.projects) projects.add(p);
+      }
+    }
+    return Array.from(projects);
+  }
+
   /** Get all connected workers for a user. */
   getWorkers(userId: string): { id: string; name: string; busy: boolean; connectedAt: string }[] {
     const result: { id: string; name: string; busy: boolean; connectedAt: string }[] = [];
@@ -91,6 +113,7 @@ class CodeWorkerHub {
     prompt: string,
     context: string,
     workerId?: string,
+    project?: string,
     callbacks?: {
       onChunk: (text: string) => void;
       onComplete: (result: string) => void;
@@ -134,6 +157,7 @@ class CodeWorkerHub {
         taskId: task.taskId,
         prompt,
         context: context || undefined,
+        project: project || undefined,
       }));
       task.status = 'running';
       console.log(`[CodeWorker] Task ${task.taskId} dispatched to ${worker.name}`);

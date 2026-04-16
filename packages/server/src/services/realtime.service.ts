@@ -176,12 +176,13 @@ export class RealtimeService {
           {
             type: 'function',
             name: 'code_task',
-            description: 'Send a coding task to the user\'s Claude Code instance. Use when the user asks you to write code, build something, fix a bug, or do any coding work.',
+            description: 'Send a coding task to the user\'s Claude Code instance. Specify which project if the user mentions one.',
             parameters: {
               type: 'object',
               properties: {
-                prompt: { type: 'string', description: 'The coding task description — what to build/fix/write' },
-                context: { type: 'string', description: 'Relevant conversation context that helps with the task' },
+                prompt: { type: 'string', description: 'The coding task description' },
+                context: { type: 'string', description: 'Relevant conversation context' },
+                project: { type: 'string', description: 'Project name to run in (auto-detected from context if not specified)' },
               },
               required: ['prompt'],
             },

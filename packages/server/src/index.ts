@@ -165,6 +165,9 @@ server.on('upgrade', (req, socket, head) => {
         try {
           const msg = JSON.parse(data.toString());
           switch (msg.type) {
+            case 'projects':
+              codeWorkerHub.setWorkerProjects(workerId, msg.projects || []);
+              break;
             case 'chunk':
               codeWorkerHub.handleChunk(workerId, msg.taskId, msg.text);
               break;

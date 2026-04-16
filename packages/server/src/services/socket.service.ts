@@ -181,11 +181,12 @@ export function setupSocketHandlers(io: Server) {
       if (whisper.action === 'code_task' && whisper.actionData?.prompt) {
         const taskPrompt = String(whisper.actionData.prompt);
         const taskContext = String(whisper.actionData.context || transcriptBuffer.slice(-5).join('\n'));
+        const taskProject = whisper.actionData.project ? String(whisper.actionData.project) : undefined;
         whisper.content = `💻 ${taskPrompt.slice(0, 100)}`;
         whisper.type = 'code';
 
         if (codeWorkerHub.hasWorkers(userId)) {
-          const task = codeWorkerHub.dispatchTask(userId, taskPrompt, taskContext, undefined, {
+          const task = codeWorkerHub.dispatchTask(userId, taskPrompt, taskContext, undefined, taskProject, {
             onChunk: (text) => {
               socket.emit('whisper', {
                 id: uuid(),
