@@ -18,7 +18,7 @@
  *   daily 05:00 UTC  — raw_archive.retention_sweep
  *   weekly Sun 06:00 — memory.decay (long-horizon pruning)
  */
-import { run, type Runner, type Task, parseCrontab } from 'graphile-worker';
+import { run, type Runner, type Task, parseCronItems } from 'graphile-worker';
 import { prisma } from '../../index';
 import { WorkingStateService } from '../memory/working-state.service';
 import { ReflectionService, CompactionService } from '../memory/reflection.service';
@@ -166,16 +166,17 @@ const tasks: Record<string, Task> = {
   },
 };
 
-// graphile-worker crontab. ASCII only — parser chokes on Unicode.
-// Format: `min hour day month weekday task_identifier`
-const CRONTAB = `
-*/15 * * * * memory.working_state.ttl_sweep
-0 */2 * * * memory.candidate_promote
-0 3 * * * memory.day_end_reflection
-0 4 * * * memory.compaction
-0 5 * * * raw_archive.retention_sweep
-0 6 * * 0 memory.decay
-`.trim();
+// Cron schedule built programmatically. Each item = one cron rule.
+// graphile-worker's parseCronItems accepts structured objects — more robust
+// than parseCrontab which has picky string parsing.
+const CRON_ITEMS = parseCronItems([
+  { task: 'memory.working_state.ttl_sweep', match: '*/15 * * * *', identifier: 'ttl-sweep' },
+  { task: 'memory.candidate_promote',       match: '0 */2 * * *', identifier: 'promote' },
+  { task: 'memory.day_end_reflection',       match: '0 3 * * *',   identifier: 'day-end' },
+  { task: 'memory.compaction',               match: '0 4 * * *',   identifier: 'compaction' },
+  { task: 'raw_archive.retention_sweep',     match: '0 5 * * *',   identifier: 'retention' },
+  { task: 'memory.decay',                    match: '0 6 * * 0',   identifier: 'decay' },
+]);
 
 export async function startJobRunner(): Promise<void> {
   if (runner) return;
@@ -189,7 +190,7 @@ export async function startJobRunner(): Promise<void> {
       concurrency: 3,
       noHandleSignals: true, // main process manages signals
       pollInterval: 5000,
-      parsedCronItems: parseCrontab(CRONTAB),
+      parsedCronItems: CRON_ITEMS,
       taskList: tasks,
       noPreparedStatements: true, // Prisma+pg uses prepared; keep workers simple
     });
