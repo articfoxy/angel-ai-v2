@@ -145,6 +145,14 @@ export class ClaudeCodeBrain {
 
   updateInstructions(instructions: string): void { this.config.instructions = instructions; }
 
+  /** Abort any in-flight request without closing the brain. Used by the Stop button. */
+  abort(): void {
+    this.abortCurrentRequest();
+    this.clearSafetyTimeout();
+    this.responseInProgress = false;
+    this.requestGeneration++; // Invalidate any late response
+  }
+
   async close(): Promise<void> {
     this.abortCurrentRequest();
     this.clearSafetyTimeout();

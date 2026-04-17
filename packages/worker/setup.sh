@@ -139,6 +139,7 @@ function connect() {
       const msg = JSON.parse(data.toString());
       if (msg.type === 'registered') { console.log(`[Angel Worker] Registered as ${msg.workerId}`); send({ type: 'projects', projects: (projects || []).map(p => p.name) }); }
       else if (msg.type === 'task') handleTask(msg.taskId, msg.prompt, msg.context, msg.project);
+      else if (msg.type === 'cancel') handleCancel(msg.taskId);
       else if (msg.type === 'pong') {}
     } catch {}
   });
@@ -152,6 +153,20 @@ function reconnect() {
   const delay = reconnectAttempts <= 5 ? 1000 : Math.min(1000 * Math.pow(2, reconnectAttempts - 5), 30000);
   if (reconnectAttempts === 6) console.log('[Angel Worker] Server still down — switching to exponential backoff');
   setTimeout(connect, delay);
+}
+
+// Track active task so we can cancel it via SIGTERM/SIGKILL
+let activeTask = null; // { taskId, process, cancelled }
+
+function handleCancel(taskId) {
+  if (activeTask && activeTask.taskId === taskId) {
+    console.log(`[Angel Worker] 🛑 Cancelling task ${taskId}`);
+    activeTask.cancelled = true;
+    try {
+      activeTask.process.kill('SIGTERM');
+      setTimeout(() => { if (activeTask && activeTask.taskId === taskId) { try { activeTask.process.kill('SIGKILL'); } catch {} } }, 2000);
+    } catch (e) { console.warn('[Angel Worker] kill failed:', e.message); }
+  }
 }
 
 function handleTask(taskId, prompt, context, requestedProject) {
@@ -177,17 +192,21 @@ function handleTask(taskId, prompt, context, requestedProject) {
   const shell = process.env.SHELL || '/bin/zsh';
   const claudeCmd = `"${CLAUDE_BIN}" -p --model opus --dangerously-skip-permissions`;
   const claude = spawn(shell, ['-lc', claudeCmd], { cwd, env: { ...process.env, HOME: process.env.HOME || require('os').homedir() } });
+  activeTask = { taskId, process: claude, cancelled: false };
   claude.stdin.write(fullPrompt);
   claude.stdin.end();
   let result = '', chunk = '', stderr = '';
   claude.stdout.on('data', (d) => { const t = d.toString(); result += t; chunk += t; if (chunk.length >= 500) { send({ type: 'chunk', taskId, text: chunk }); chunk = ''; } });
   claude.stderr.on('data', (d) => { stderr += d.toString(); });
-  claude.on('close', (code) => {
+  claude.on('close', (code, signal) => {
+    const wasCancelled = activeTask?.cancelled;
+    activeTask = null;
     if (chunk) send({ type: 'chunk', taskId, text: chunk });
-    if (code === 0) { send({ type: 'complete', taskId, result }); console.log(`✅ Done (${result.length} chars)`); }
-    else { const errMsg = result || stderr || `Exit ${code}`; send({ type: 'error', taskId, error: errMsg }); console.log(`❌ Failed (${code}): ${(stderr || result).slice(0, 300)}`); }
+    if (wasCancelled) { send({ type: 'error', taskId, error: 'Cancelled by user' }); console.log(`🛑 Cancelled`); }
+    else if (code === 0) { send({ type: 'complete', taskId, result }); console.log(`✅ Done (${result.length} chars)`); }
+    else { const errMsg = result || stderr || `Exit ${code}${signal ? ' (' + signal + ')' : ''}`; send({ type: 'error', taskId, error: errMsg }); console.log(`❌ Failed (${code}): ${(stderr || result).slice(0, 300)}`); }
   });
-  claude.on('error', (err) => send({ type: 'error', taskId, error: `Spawn failed: ${err.message}` }));
+  claude.on('error', (err) => { activeTask = null; send({ type: 'error', taskId, error: `Spawn failed: ${err.message}` }); });
 }
 
 function send(msg) { if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg)); }

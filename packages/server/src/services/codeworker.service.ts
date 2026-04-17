@@ -197,6 +197,24 @@ class CodeWorkerHub {
     console.log(`[CodeWorker] Task ${taskId} completed (${result.length} chars)`);
   }
 
+  /**
+   * Cancel any running task for this user. Sends a cancel message to the worker,
+   * which kills the spawned Claude process. Returns the cancelled taskId or null.
+   */
+  cancelUserTasks(userId: string): string | null {
+    for (const w of this.workers.values()) {
+      if (w.userId === userId && w.currentTaskId) {
+        const taskId = w.currentTaskId;
+        try { w.ws.send(JSON.stringify({ type: 'cancel', taskId })); } catch {}
+        console.log(`[CodeWorker] Cancel sent for task ${taskId} on ${w.name}`);
+        // Mark immediately so the UI clears even if worker is slow to respond
+        this.handleError(w.id, taskId, 'Cancelled by user');
+        return taskId;
+      }
+    }
+    return null;
+  }
+
   /** Handle task error from a worker. */
   handleError(workerId: string, taskId: string, error: string): void {
     const task = this.tasks.get(taskId);

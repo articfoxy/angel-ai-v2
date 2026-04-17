@@ -289,13 +289,25 @@ export function setupSocketHandlers(io: Server) {
           // Signal: code task is starting — client should pause input + show status
           socket.emit('code_task:status', { status: 'dispatching', task: taskPrompt.slice(0, 120) });
 
+          // Capture session-scoped refs now. If the session ends or a new one
+          // starts on this socket while the task is in flight, the module-level
+          // tts / key bindings could point at a different session — we want the
+          // completion to target the session that dispatched the task.
+          const taskSessionId = currentSessionId;
+          const taskTts = tts;
+          const taskAnthropicKey = sessionAnthropicKey;
+          const taskOwnerLanguage = sessionOwnerLanguage;
+          const sessionStillActive = () => taskSessionId !== null && currentSessionId === taskSessionId;
+
           const task = codeWorkerHub.dispatchTask(userId, taskPrompt, taskContext, undefined, taskProject, {
             onChunk: (text) => {
+              if (!sessionStillActive()) return;
               // Live progress goes to the status banner — no whisper cards
               // (prevents transcript clutter; user sees final output at completion)
               socket.emit('code_task:status', { status: 'working', detail: text.slice(-200) });
             },
             onComplete: async (result) => {
+              if (!sessionStillActive()) return;
               socket.emit('code_task:status', { status: 'done', result: result.slice(0, 400) });
 
               // (1) RAW OUTPUT card — full Claude Code output, display only, no TTS
@@ -309,7 +321,8 @@ export function setupSocketHandlers(io: Server) {
 
               // (2) SYNTHESIZED SUMMARY — 1-2 sentences, spoken via TTS
               try {
-                const summary = await synthesizeCodeSummary(sessionAnthropicKey, sessionOwnerLanguage, result, taskPrompt);
+                const summary = await synthesizeCodeSummary(taskAnthropicKey, taskOwnerLanguage, result, taskPrompt);
+                if (!sessionStillActive()) return;
                 if (summary) {
                   const summaryCard = {
                     id: uuid(),
@@ -318,13 +331,14 @@ export function setupSocketHandlers(io: Server) {
                     createdAt: new Date().toISOString(),
                   };
                   socket.emit('whisper', summaryCard);
-                  if (tts && tts.isConnected) tts.speak(summaryCard.id, summary);
+                  if (taskTts && taskTts.isConnected) taskTts.speak(summaryCard.id, summary);
                 }
               } catch (err) {
                 console.error('[code_task] summarization failed:', (err as any)?.message);
               }
             },
             onError: (error) => {
+              if (!sessionStillActive()) return;
               socket.emit('code_task:status', { status: 'failed', error: error.slice(0, 200) });
               const errorMsg = `Task failed: ${error.slice(0, 100)}`;
               const errorCard = {
@@ -336,7 +350,7 @@ export function setupSocketHandlers(io: Server) {
               };
               socket.emit('whisper', errorCard);
               // Speak the failure so user knows without looking at screen
-              if (tts && tts.isConnected) tts.speak(errorCard.id, errorMsg);
+              if (taskTts && taskTts.isConnected) taskTts.speak(errorCard.id, errorMsg);
             },
           });
           if (task) {
@@ -651,7 +665,10 @@ export function setupSocketHandlers(io: Server) {
 
             // Feed transcript to Realtime API (always-active Angel)
             // Echo gate: skip during TTS playback to prevent AI responding to its own voice
-            if (realtime && !ttsPlaying) {
+            // Code mode gate: transcripts stay in buffer but never auto-trigger Claude Opus —
+            // user must press "Ask" or type a message to invoke Claude. Prevents burning
+            // API calls on idle chatter and accidental Claude Code dispatches.
+            if (realtime && !ttsPlaying && sessionMode !== 'code') {
               realtime.feedTranscript(`[${label}]: ${data.text}`);
             }
 
@@ -781,6 +798,46 @@ export function setupSocketHandlers(io: Server) {
     });
 
     // Angel manual activation — button press triggers immediate response via Realtime API
+    // Stop button — aborts whatever the AI is doing right now:
+    //   1. Brain request in flight (ClaudeCodeBrain or RealtimeService) → abort
+    //   2. Claude Code task running on a worker → send cancel → worker kills process
+    //   3. Active TTS playback → cancel
+    socket.on('angel:stop', () => {
+      if (!socket.userId) return;
+      console.log(`[angel:stop] User ${socket.userId} requested stop`);
+
+      // 1. Cancel any running worker task
+      const cancelledTaskId = codeWorkerHub.cancelUserTasks(socket.userId);
+      if (cancelledTaskId) {
+        socket.emit('code_task:status', { status: 'failed', error: 'Stopped by user' });
+      }
+
+      // 2. Abort current brain request (doesn't disconnect, just cancels in-flight work)
+      if (realtime) {
+        try { realtime.abort(); } catch {}
+      }
+      if (angelProcessing) {
+        angelProcessing = false;
+        if (angelThinkingTimer) { clearTimeout(angelThinkingTimer); angelThinkingTimer = null; }
+        socket.emit('angel:thinking', { active: false });
+      }
+
+      // 3. Cancel TTS if playing
+      if (tts) { try { tts.cancel(); } catch {} }
+      if (ttsPlaying) {
+        ttsPlaying = false;
+        if (ttsEchoTimer) { clearTimeout(ttsEchoTimer); ttsEchoTimer = null; }
+        socket.emit('tts:cancel', {});
+      }
+
+      socket.emit('whisper', {
+        id: uuid(),
+        type: 'mode_switch',
+        content: '⏹ Stopped',
+        createdAt: new Date().toISOString(),
+      });
+    });
+
     socket.on('angel:activate', async () => {
       if (!currentSessionId || !socket.userId || angelProcessing) return;
 
@@ -805,6 +862,14 @@ export function setupSocketHandlers(io: Server) {
 
       try {
         if (realtime) {
+          // Code mode: transcripts are NOT auto-fed to the brain, so we replay
+          // the recent buffer now so Claude Opus has context when answering.
+          if (sessionMode === 'code') {
+            const recent = transcriptBuffer.slice(-20);
+            for (const line of recent) {
+              try { realtime.feedTranscript(line); } catch {}
+            }
+          }
           realtime.forceRespond();
           // forceRespond triggers async response via WebSocket
           // Set a max timeout to clear thinking indicator
@@ -846,6 +911,14 @@ export function setupSocketHandlers(io: Server) {
       // Add to transcript buffer
       transcriptBuffer.push(`[Owner]: ${text.slice(0, 500)}`);
       if (transcriptBuffer.length > 60) transcriptBuffer = transcriptBuffer.slice(-40);
+
+      // In Code mode, the brain didn't receive the buffered context — replay now
+      if (sessionMode === 'code') {
+        const recent = transcriptBuffer.slice(-20, -1); // all except the message we just pushed
+        for (const line of recent) {
+          try { realtime.feedTranscript(line); } catch {}
+        }
+      }
 
       // Feed to AI then force immediate response — user typed directly, always answer
       realtime.feedTranscript(`[Owner]: ${text}`);

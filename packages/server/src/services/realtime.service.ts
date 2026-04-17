@@ -325,6 +325,15 @@ export class RealtimeService {
     }
   }
 
+  /** Abort any in-flight response without closing the WebSocket. Used by the Stop button. */
+  abort(): void {
+    if (this.ws?.readyState === WebSocket.OPEN && this.responseInProgress) {
+      try { this.send({ type: 'response.cancel' }); } catch {}
+    }
+    this.responseInProgress = false;
+    this.currentResponseText = '';
+  }
+
   /**
    * Safety timeout: if response.done never arrives, unstick responseInProgress.
    */

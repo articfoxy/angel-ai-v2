@@ -378,18 +378,26 @@ export function StartScreen() {
     };
   }, [cleanupSessionListeners]);
 
-  // Load mode settings from SecureStore
+  // Load mode settings from SecureStore. Each key is parsed independently so a
+  // single corrupted value doesn't prevent the rest of the settings from loading.
   useEffect(() => {
+    const parseArray = async (key: string, apply: (arr: string[]) => void) => {
+      try {
+        const raw = await SecureStore.getItemAsync(key);
+        if (!raw) return;
+        const p = JSON.parse(raw);
+        if (Array.isArray(p)) apply(p);
+      } catch {}
+    };
     (async () => {
       try {
         const savedMode = await SecureStore.getItemAsync('angel_v2_mode');
         if (savedMode === 'translation' || savedMode === 'intelligence' || savedMode === 'hybrid' || savedMode === 'code') setAngelMode(savedMode as AngelMode);
-        const savedLangs = await SecureStore.getItemAsync('angel_v2_translate_languages');
-        if (savedLangs) { const p = JSON.parse(savedLangs); if (Array.isArray(p)) setTranslateLangs(p); }
-        const savedPresets = await SecureStore.getItemAsync('angel_v2_intelligence_presets');
-        if (savedPresets) { const p = JSON.parse(savedPresets); if (Array.isArray(p)) setIntelligencePresets(p); }
-        const savedCodePresets = await SecureStore.getItemAsync('angel_v2_code_presets');
-        if (savedCodePresets) { const p = JSON.parse(savedCodePresets); if (Array.isArray(p)) setCodePresets(p); }
+      } catch {}
+      await parseArray('angel_v2_translate_languages', setTranslateLangs);
+      await parseArray('angel_v2_intelligence_presets', setIntelligencePresets);
+      await parseArray('angel_v2_code_presets', setCodePresets);
+      try {
         const savedCustom = await SecureStore.getItemAsync('angel_v2_custom_instructions');
         if (savedCustom) setCustomInstructions(savedCustom);
       } catch {}
@@ -498,6 +506,19 @@ export function StartScreen() {
     }
     sock.emit('angel:activate');
   }, [isActive]);
+
+  const handleAngelStop = useCallback(() => {
+    const sock = getSocket();
+    if (!sock?.connected) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    // Stop any local TTS immediately — don't wait for server roundtrip
+    const player = getTTSPlayer();
+    if (player.playing) player.stop();
+    sock.emit('angel:stop');
+    // Clear local state optimistically; server will confirm via events
+    setAngelThinking(false);
+    codeTaskBusyRef.current = false;
+  }, []);
 
   const handleToggle = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -881,19 +902,25 @@ export function StartScreen() {
         )}
         <AngelButton onPress={handleToggle} isActive={isActive} compact />
         {isActive && (
-          <TouchableOpacity
-            onPress={handleAngelActivate}
-            disabled={angelThinking}
-            style={[styles.askAngelBtn, angelThinking && { opacity: 0.5 }]}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-          >
-            {angelThinking ? (
-              <ActivityIndicator size="small" color={colors.primary} />
-            ) : (
+          (angelThinking || codeTaskStatus === 'dispatching' || codeTaskStatus === 'working') ? (
+            <TouchableOpacity
+              onPress={handleAngelStop}
+              style={styles.stopAngelBtn}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons name="stop-circle" size={18} color={colors.danger} />
+              <Text style={styles.stopAngelText}>Stop</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              onPress={handleAngelActivate}
+              style={styles.askAngelBtn}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
               <Ionicons name="sparkles" size={18} color={colors.primary} />
-            )}
-            <Text style={styles.askAngelText}>Ask</Text>
-          </TouchableOpacity>
+              <Text style={styles.askAngelText}>Ask</Text>
+            </TouchableOpacity>
+          )
         )}
       </View>
     </KeyboardAvoidingView>
@@ -1061,6 +1088,22 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primaryMuted,
     width: 56,
     justifyContent: 'center',
+  },
+  stopAngelBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: spacing.xs + 2,
+    borderRadius: radius.full,
+    backgroundColor: 'rgba(255, 69, 58, 0.15)',
+    width: 64,
+    justifyContent: 'center',
+  },
+  stopAngelText: {
+    color: colors.danger,
+    fontSize: fontSize.xs,
+    fontWeight: '700',
   },
   askAngelText: {
     color: colors.primary,
