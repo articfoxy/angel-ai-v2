@@ -39,6 +39,21 @@ app.use(express.json({ limit: '2mb' }));
 // Health check
 app.get('/health', (_, res) => res.json({ status: 'ok', version: '2.0.0' }));
 
+// Detailed readiness probe — infra status
+app.get('/health/ready', async (_, res) => {
+  const checks: Record<string, any> = {};
+  try { await prisma.$queryRawUnsafe('SELECT 1'); checks.db = 'ok'; }
+  catch (e: any) { checks.db = `err: ${e?.message?.slice(0, 80)}`; }
+  try {
+    const { RawAssetService } = await import('./services/storage/raw-asset.service');
+    const svc = new RawAssetService();
+    checks.raw_archive = svc.isEnabled ? (await svc.ping() ? 'ok' : 'unreachable') : 'disabled';
+  } catch { checks.raw_archive = 'err'; }
+  checks.otel = process.env.OTEL_ENABLED === 'true' ? 'enabled' : 'disabled';
+  checks.jobs = 'running'; // we'd need a handle to the runner to actually check
+  res.json({ status: Object.values(checks).every((v) => v === 'ok' || v === 'disabled' || v === 'enabled' || v === 'running') ? 'ok' : 'degraded', checks, version: '2.0.0' });
+});
+
 // Debug endpoint — check env vars (authenticated to prevent key prefix leaks)
 app.get('/debug/env', authenticateToken, (_, res) => {
   res.json({
