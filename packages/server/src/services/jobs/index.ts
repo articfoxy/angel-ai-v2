@@ -166,18 +166,14 @@ const tasks: Record<string, Task> = {
   },
 };
 
+// graphile-worker crontab. ASCII only — parser chokes on Unicode.
+// Format: `min hour day month weekday task_identifier`
 const CRONTAB = `
-# Working state TTL sweep — every 15 min
 */15 * * * * memory.working_state.ttl_sweep
-# Candidate promotion — every 2 hours
 0 */2 * * * memory.candidate_promote
-# Day-end reflection — 03:00 UTC
 0 3 * * * memory.day_end_reflection
-# Compaction — 04:00 UTC
 0 4 * * * memory.compaction
-# Raw archive retention sweep — 05:00 UTC
 0 5 * * * raw_archive.retention_sweep
-# Decay — Sunday 06:00 UTC
 0 6 * * 0 memory.decay
 `.trim();
 
