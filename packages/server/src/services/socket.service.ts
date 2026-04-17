@@ -186,8 +186,12 @@ export function setupSocketHandlers(io: Server) {
         whisper.type = 'code';
 
         if (codeWorkerHub.hasWorkers(userId)) {
+          // Signal: code task is starting — client should pause input + show status
+          socket.emit('code_task:status', { status: 'dispatching', task: taskPrompt.slice(0, 120) });
+
           const task = codeWorkerHub.dispatchTask(userId, taskPrompt, taskContext, undefined, taskProject, {
             onChunk: (text) => {
+              socket.emit('code_task:status', { status: 'working', detail: text.slice(-200) });
               socket.emit('whisper', {
                 id: uuid(),
                 type: 'code',
@@ -196,6 +200,7 @@ export function setupSocketHandlers(io: Server) {
               });
             },
             onComplete: (result) => {
+              socket.emit('code_task:status', { status: 'done', result: result.slice(0, 400) });
               socket.emit('whisper', {
                 id: uuid(),
                 type: 'code',
@@ -205,6 +210,7 @@ export function setupSocketHandlers(io: Server) {
               });
             },
             onError: (error) => {
+              socket.emit('code_task:status', { status: 'failed', error: error.slice(0, 200) });
               socket.emit('whisper', {
                 id: uuid(),
                 type: 'warning',
@@ -216,9 +222,12 @@ export function setupSocketHandlers(io: Server) {
           if (task) {
             whisper.detail = `Sent to worker. Task ID: ${task.taskId}`;
           } else {
+            // Dispatch failed — clear the locked state immediately
+            socket.emit('code_task:status', { status: 'failed', error: 'All workers busy' });
             whisper.detail = 'All workers are busy. Try again in a moment.';
           }
         } else {
+          socket.emit('code_task:status', { status: 'failed', error: 'No workers connected' });
           whisper.detail = 'No connected workers. Run the Angel worker agent on your machine.';
         }
       }

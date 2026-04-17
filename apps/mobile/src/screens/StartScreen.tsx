@@ -44,6 +44,7 @@ const SESSION_EVENTS = [
   'session:error',
   'deepgram:status',
   'angel:thinking',
+  'code_task:status',
   'tts:start',
   'tts:chunk',
   'tts:done',
@@ -103,6 +104,11 @@ export function StartScreen() {
   const [gain, setGainState] = useState(getGain());
   const [showGain, setShowGain] = useState(false);
   const [angelThinking, setAngelThinking] = useState(false);
+  // Code task lifecycle: null = idle, string = "dispatching" | "working" | "done" | "failed"
+  const [codeTaskStatus, setCodeTaskStatus] = useState<null | 'dispatching' | 'working' | 'done' | 'failed'>(null);
+  const [codeTaskDetail, setCodeTaskDetail] = useState<string>('');
+  const codeTaskClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const codeTaskBusyRef = useRef(false); // Synchronous gate for audio callback
   const [angelMode, setAngelMode] = useState<AngelMode>('intelligence');
   const [translateLangs, setTranslateLangs] = useState<string[]>(['Chinese']);
   const [intelligencePresets, setIntelligencePresets] = useState<string[]>(['jargon']);
@@ -245,6 +251,29 @@ export function StartScreen() {
 
     sock.on('angel:thinking', (data: { active: boolean }) => {
       setAngelThinking(data.active);
+    });
+
+    sock.on('code_task:status', (data: { status: 'dispatching' | 'working' | 'done' | 'failed'; task?: string; detail?: string; result?: string; error?: string }) => {
+      // Update busy ref synchronously so audio callback sees it immediately
+      codeTaskBusyRef.current = data.status === 'dispatching' || data.status === 'working';
+      setCodeTaskStatus(data.status);
+      if (data.status === 'dispatching') setCodeTaskDetail(data.task || 'Sending to Claude Code...');
+      else if (data.status === 'working') setCodeTaskDetail(data.detail || 'Working...');
+      else if (data.status === 'done') setCodeTaskDetail(data.result ? data.result.slice(0, 160) : 'Task completed');
+      else if (data.status === 'failed') setCodeTaskDetail(data.error || 'Task failed');
+
+      // Clear any previous auto-clear timer
+      if (codeTaskClearTimerRef.current) { clearTimeout(codeTaskClearTimerRef.current); codeTaskClearTimerRef.current = null; }
+
+      // Terminal states auto-clear after 4s so user can see the result
+      if (data.status === 'done' || data.status === 'failed') {
+        codeTaskBusyRef.current = false; // Release audio/input lock immediately
+        codeTaskClearTimerRef.current = setTimeout(() => {
+          setCodeTaskStatus(null);
+          setCodeTaskDetail('');
+          codeTaskClearTimerRef.current = null;
+        }, 4000);
+      }
     });
 
     sock.on('deepgram:status', (data: { status: string }) => {
@@ -626,6 +655,9 @@ export function StartScreen() {
           // IMPORTANT: We must slice the buffer to get an exact-size copy.
           // Uint8Array.buffer can be larger than byteLength if the view is a subarray.
           await startRecording((pcmBytes: Uint8Array) => {
+            // Drop audio chunks while Claude Code is working — prevents picking up
+            // stray speech during long code tasks and avoids polluting transcript.
+            if (codeTaskBusyRef.current) return;
             const currentSocket = getSocket();
             if (currentSocket?.connected) {
               const exactBuffer = pcmBytes.buffer.slice(
@@ -738,22 +770,54 @@ export function StartScreen() {
         )}
       </View>
 
+      {/* ═══ LIVE STATUS BANNER — thinking / code task ═══ */}
+      {(angelThinking || codeTaskStatus) && (
+        <View style={[
+          styles.statusBanner,
+          codeTaskStatus === 'done' && styles.statusBannerSuccess,
+          codeTaskStatus === 'failed' && styles.statusBannerError,
+        ]}>
+          {codeTaskStatus === 'done' ? (
+            <Ionicons name="checkmark-circle" size={16} color={colors.success} />
+          ) : codeTaskStatus === 'failed' ? (
+            <Ionicons name="alert-circle" size={16} color={colors.warning} />
+          ) : (
+            <ActivityIndicator size="small" color={colors.primary} />
+          )}
+          <Text style={styles.statusBannerText} numberOfLines={2}>
+            {codeTaskStatus === 'dispatching' && `💻 Sending to Claude Code: ${codeTaskDetail}`}
+            {codeTaskStatus === 'working' && `⚙️ Claude Code working: ${codeTaskDetail}`}
+            {codeTaskStatus === 'done' && `✅ ${codeTaskDetail}`}
+            {codeTaskStatus === 'failed' && `❌ ${codeTaskDetail}`}
+            {!codeTaskStatus && angelThinking && '✨ Angel is thinking...'}
+          </Text>
+        </View>
+      )}
+
       {/* ═══ BOTTOM: Controls ═══ */}
 
       {/* Text input */}
       <View style={styles.directiveRow}>
         <TextInput
-          style={[styles.directiveInput, directiveFocused && styles.inputFocused]}
+          style={[
+            styles.directiveInput,
+            directiveFocused && styles.inputFocused,
+            (codeTaskStatus === 'dispatching' || codeTaskStatus === 'working') && { opacity: 0.5 },
+          ]}
           value={liveDirective}
           onChangeText={setLiveDirective}
           onFocus={() => setDirectiveFocused(true)}
           onBlur={() => setDirectiveFocused(false)}
-          placeholder={isActive ? 'Talk to Angel... ( /command )' : 'Type to Angel after starting...'}
+          placeholder={
+            codeTaskStatus === 'dispatching' || codeTaskStatus === 'working'
+              ? '🔒 Claude Code is working — input paused...'
+              : isActive ? 'Talk to Angel... ( /command )' : 'Type to Angel after starting...'
+          }
           placeholderTextColor={colors.textTertiary}
           returnKeyType="send"
           onSubmitEditing={sendMessage}
           blurOnSubmit={false}
-          editable={isActive}
+          editable={isActive && codeTaskStatus !== 'dispatching' && codeTaskStatus !== 'working'}
         />
         {liveDirective.trim().length > 0 && (
           <TouchableOpacity onPress={sendMessage} style={styles.directiveSend}>
@@ -897,6 +961,34 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   activeContainer: { flex: 1 },
+  statusBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 2,
+    backgroundColor: 'rgba(124, 127, 255, 0.12)',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(124, 127, 255, 0.3)',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(124, 127, 255, 0.3)',
+  },
+  statusBannerSuccess: {
+    backgroundColor: 'rgba(52, 211, 153, 0.12)',
+    borderTopColor: 'rgba(52, 211, 153, 0.3)',
+    borderBottomColor: 'rgba(52, 211, 153, 0.3)',
+  },
+  statusBannerError: {
+    backgroundColor: 'rgba(251, 191, 36, 0.12)',
+    borderTopColor: 'rgba(251, 191, 36, 0.3)',
+    borderBottomColor: 'rgba(251, 191, 36, 0.3)',
+  },
+  statusBannerText: {
+    flex: 1,
+    color: colors.text,
+    fontSize: fontSize.sm,
+    fontWeight: '500',
+  },
   directiveRow: {
     flexDirection: 'row',
     alignItems: 'center',
