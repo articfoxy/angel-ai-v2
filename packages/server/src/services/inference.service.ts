@@ -86,8 +86,9 @@ export class InferenceService {
       return null;
     }
 
-    // Build context from memory system
-    const memoryContext = await this.retrieval.buildContext(userId, recentTranscript);
+    // Build context from memory system (v2 signature: includes sessionId + opts)
+    const memoryResult = await this.retrieval.buildContext(userId, recentTranscript, null, { maxTokens: 3000 });
+    const memoryContext = memoryResult.prompt;
 
     // Build skills context
     let skillsContext = '';

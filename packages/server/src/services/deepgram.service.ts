@@ -223,26 +223,30 @@ export class DeepgramService {
         isFinal,
       });
 
-      // Store final segments as episodes
+      // Store final segments as Observations (Layer C — append-only raw events).
+      // The MemoryJudgeService batches these into Episodes + Facts on triggers.
       if (isFinal && transcript.transcript.trim()) {
-        // data.start = seconds offset from stream start; data.duration = segment duration in seconds
-        const startTime = new Date(this.sessionStartTime + (data.start ?? 0) * 1000);
-        const endTime = new Date(this.sessionStartTime + ((data.start ?? 0) + (data.duration ?? 0)) * 1000);
-
-        const writePromise = prisma.episode.create({
+        const observedAt = new Date(this.sessionStartTime + (data.start ?? 0) * 1000);
+        const writePromise = prisma.observation.create({
           data: {
             sessionId: this.config.sessionId,
             userId: this.config.userId,
+            observedAt,
+            modality: 'audio_transcript',
+            source: 'deepgram',
             speaker: speakerLabel || `speaker_${speaker ?? 'unknown'}`,
             content: transcript.transcript,
-            startTime,
-            endTime,
+            importance: 5,
+            privacyClass: 'public',
+            extractorVersions: { asr: 'deepgram-nova-2' },
+            schemaVersion: 1,
+            processed: false,
           },
         }).catch((err: Error) => {
           this.episodeWriteErrors++;
-          console.error(`[Deepgram] Episode save error (#${this.episodeWriteErrors}):`, err.message);
+          console.error(`[Deepgram] Observation save error (#${this.episodeWriteErrors}):`, err.message);
           if (this.episodeWriteErrors === 5) {
-            console.warn(`[Deepgram] ${this.episodeWriteErrors} episode write failures — transcript data may be lost`);
+            console.warn(`[Deepgram] ${this.episodeWriteErrors} observation write failures — transcript data may be lost`);
             this.config.onError?.('Some transcript data could not be saved. Session will continue.');
           }
         });

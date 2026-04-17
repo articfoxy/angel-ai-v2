@@ -186,6 +186,21 @@ export function setupSocketHandlers(io: Server) {
         return false;
       }
 
+      // Flush unprocessed observations via the memory judge as a mode-switch trigger.
+      // This produces an episode summary bounded by the old mode, so Layer D stays coherent.
+      (async () => {
+        try {
+          const { MemoryJudgeService } = await import('./memory/judge.service');
+          const judge = new MemoryJudgeService(sessionOpenaiKey);
+          const res = await judge.run({ userId: socket.userId!, sessionId: currentSessionId, trigger: { kind: 'mode_switch', modeFrom: oldMode, modeTo: newMode } });
+          if (res.observationsProcessed > 0) {
+            console.log(`[mode-switch] judge: ${res.observationsProcessed} obs → ${res.factsAdded} add, ${res.factsUpdated} upd, ${res.factsSuperseded} sup${res.episodeCreated ? ', ep=' + res.episodeCreated.slice(0, 8) : ''}`);
+          }
+        } catch (e) {
+          console.warn('[mode-switch] judge failed:', (e as any)?.message?.slice(0, 80));
+        }
+      })();
+
       // Replay last N transcripts so the new brain has short-term context
       const SHORT_TERM_LINES = 20;
       const recent = transcriptBuffer.slice(-SHORT_TERM_LINES);
@@ -243,35 +258,29 @@ export function setupSocketHandlers(io: Server) {
       if (whisper.action === 'save_memory' && whisper.actionData) {
         try {
           const memContent = String(whisper.actionData.content || whisper.content);
-          const mem = await prisma.memory.create({
-            data: {
-              userId,
-              content: memContent,
-              importance: Number(whisper.actionData.importance) || 7,
-              category: String(whisper.actionData.category || 'fact'),
-              source: currentSessionId || 'voice_command',
-            },
-          });
-          console.log(`[agent] Saved memory for user ${userId}: ${memContent}`);
+          const predicate = String(whisper.actionData.category || 'believes');
+          const importance = Number(whisper.actionData.importance) || 7;
 
-          // Generate embedding async so the memory is retrievable via vector search
-          (async () => {
-            try {
-              const retrieval = new RetrievalService(sessionOpenaiKey);
-              const embedding = await retrieval.getEmbedding(memContent);
-              const vectorStr = `[${embedding.join(',')}]`;
-              await prisma.$executeRawUnsafe(
-                `UPDATE "Memory" SET embedding = $1::vector WHERE id = $2`,
-                vectorStr, mem.id
-              );
-              console.log(`[agent] Embedding saved for memory ${mem.id}`);
-            } catch (embErr) {
-              console.warn('[agent] Embedding generation skipped:', (embErr as any)?.message?.slice(0, 60));
-            }
-          })();
+          // Route through FactsService so it gets proper bi-temporal tracking + audit
+          const { FactsService } = await import('./memory/facts.service');
+          const facts = new FactsService(sessionOpenaiKey);
+          await facts.add({
+            userId,
+            namespace: 'general',
+            subjectType: 'user',
+            subjectName: 'user',
+            predicate,
+            objectType: 'string',
+            objectValue: memContent,
+            content: memContent,
+            confidence: 0.9, // explicit remember = high confidence
+            importance,
+            sourceObservationIds: [],
+            tags: ['explicit_remember'],
+          }, 'standard', 'user');
+          console.log(`[agent] Saved fact for user ${userId}: ${memContent.slice(0, 80)}`);
         } catch (memErr) {
-          console.error('[agent] Failed to save memory:', memErr);
-          // Silently fail — don't interrupt the user with a memory error whisper
+          console.error('[agent] Failed to save fact:', memErr);
           return;
         }
       }
@@ -529,12 +538,13 @@ export function setupSocketHandlers(io: Server) {
         sessionCdPresets = cdPresets;
         sessionCustomInstr = customInstr;
 
-        // Retrieve user memories for context injection
+        // Retrieve user memories for context injection (v2: budgeted across 8 layers)
         let memoryContext = '';
         try {
           const retrieval = new RetrievalService(openaiKey);
-          memoryContext = await retrieval.buildContext(userId, customInstr || 'general context', 2000);
-          console.log(`[session] Memory context: ${memoryContext.length} chars`);
+          const result = await retrieval.buildContext(userId, customInstr || 'general context', sessionId, { maxTokens: 3000 });
+          memoryContext = result.prompt;
+          console.log(`[session] Memory context: ~${result.tokenEstimate} tokens, reasons: ${result.reasonCodes.join('|')}`);
         } catch (memErr) {
           console.warn('[session] Memory retrieval skipped:', (memErr as any)?.message?.slice(0, 80));
         }
@@ -674,23 +684,34 @@ export function setupSocketHandlers(io: Server) {
               transcriptBuffer = transcriptBuffer.slice(-40);
             }
 
-            // Periodic memory refresh — inject fresh memories as conversation evolves
+            // Periodic memory refresh + judge trigger — runs every N transcripts
             transcriptsSinceMemoryRefresh++;
             if (transcriptsSinceMemoryRefresh >= MEMORY_REFRESH_INTERVAL && realtime && socket.userId) {
               transcriptsSinceMemoryRefresh = 0;
               const recentText = transcriptBuffer.slice(-5).join(' ');
               const uid = socket.userId;
+              const sid = currentSessionId;
               // Async — don't block transcript flow
               (async () => {
                 try {
+                  // (1) Run judge on accumulated observations (periodic trigger).
+                  //     Creates episode boundaries, proposes facts, updates working state.
+                  const { MemoryJudgeService } = await import('./memory/judge.service');
+                  const judge = new MemoryJudgeService(sessionOpenaiKey);
+                  const jr = await judge.run({ userId: uid, sessionId: sid, trigger: { kind: 'periodic', sessionId: sid } });
+                  if (jr.observationsProcessed > 0) {
+                    console.log(`[judge:periodic] ${jr.observationsProcessed} obs → ${jr.factsAdded}+${jr.factsUpdated}~${jr.factsSuperseded} facts${jr.episodeCreated ? ', ep' : ''}`);
+                  }
+
+                  // (2) Refresh retrieval context with the latest memories.
                   const retrieval = new RetrievalService(sessionOpenaiKey);
-                  const freshMemory = await retrieval.buildContext(uid, recentText, 2000);
-                  if (realtime && freshMemory.length > 50) {
-                    rebuildInstructions(freshMemory);
-                    console.log(`[session] Memory context refreshed (${freshMemory.length} chars)`);
+                  const result = await retrieval.buildContext(uid, recentText, sid, { maxTokens: 2500 });
+                  if (realtime && result.prompt.length > 50) {
+                    rebuildInstructions(result.prompt);
+                    console.log(`[session] Memory context refreshed (~${result.tokenEstimate} tokens)`);
                   }
                 } catch (e) {
-                  console.warn('[session] Memory refresh failed:', (e as any)?.message?.slice(0, 60));
+                  console.warn('[session] Periodic memory cycle failed:', (e as any)?.message?.slice(0, 60));
                 }
               })();
             }
@@ -940,6 +961,25 @@ export function setupSocketHandlers(io: Server) {
       resetIdleTimer(); // Text activity keeps session alive even with mic paused
       const text = data.text.trim();
       console.log(`[session] Text message from owner: "${text.slice(0, 80)}"`);
+
+      // Record as an observation (Layer C — append-only)
+      if (socket.userId) {
+        (async () => {
+          try {
+            const { ObservationService } = await import('./memory/observation.service');
+            const obs = new ObservationService(sessionOpenaiKey);
+            await obs.write({
+              userId: socket.userId!,
+              sessionId: currentSessionId ?? null,
+              modality: 'user_command',
+              source: 'text_input',
+              speaker: 'Owner',
+              content: text,
+              importance: 6,
+            });
+          } catch {}
+        })();
+      }
 
       // Add to transcript buffer
       transcriptBuffer.push(`[Owner]: ${text.slice(0, 500)}`);
@@ -1247,24 +1287,42 @@ export function setupSocketHandlers(io: Server) {
           // Session may not exist or already ended — fall through
         }
 
-        // Run extraction in the background (don't block disconnect handler)
+        // Post-session memory jobs (judge + reflection + candidate promotion)
+        // Fire-and-forget; socket is already closed.
         (async () => {
           try {
-            const extraction = new ExtractionService(keyForExtraction);
-            const result = await extraction.processSession(sid, uid);
-            const summary = result?.summary || 'Session completed';
+            const { MemoryJudgeService } = await import('./memory/judge.service');
+            const { runPostSessionMemoryJobs } = await import('./memory/reflection.service');
+            const { WorkingStateService } = await import('./memory/working-state.service');
+
+            // Flush any remaining unprocessed observations via the judge
+            const judge = new MemoryJudgeService(keyForExtraction);
+            const judgeRes = await judge.run({ userId: uid, sessionId: sid, trigger: { kind: 'session_end', sessionId: sid } });
+            console.log(`[disconnect] judge: ${judgeRes.observationsProcessed} obs → ${judgeRes.factsAdded}+${judgeRes.factsUpdated}~${judgeRes.factsSuperseded} facts, ep=${judgeRes.episodeCreated?.slice(0, 8) || 'none'}`);
+
+            // Pull the session-end episode summary for the session record
+            const latestEp = await prisma.episode.findFirst({
+              where: { userId: uid, sessionId: sid, status: 'active' },
+              orderBy: { createdAt: 'desc' },
+            });
+            const summary = latestEp?.summary ?? 'Session completed';
+
             await prisma.session.update({
               where: { id: sid },
               data: { status: 'ended', summary },
             }).catch(() => {});
-            console.log(`[disconnect] Extraction done for ${sid}: ${result?.memoriesExtracted ?? 0} memories`);
-            // Post-session reflection (entity merging, core memory update)
-            runPostSessionReflection(uid).catch((e) => console.error('[disconnect] reflection:', e));
+
+            // Clear this session's working state
+            const ws = new WorkingStateService();
+            await ws.clearSession(uid, sid).catch(() => {});
+
+            // Reflection + compaction
+            await runPostSessionMemoryJobs(uid, sid, keyForExtraction);
           } catch (err) {
-            console.error('[disconnect] extraction failed:', (err as any)?.message);
+            console.error('[disconnect] post-session jobs failed:', (err as any)?.message);
             await prisma.session.update({
               where: { id: sid },
-              data: { status: 'ended', summary: 'Session ended (extraction failed)' },
+              data: { status: 'ended', summary: 'Session ended' },
             }).catch(() => {});
           }
         })();

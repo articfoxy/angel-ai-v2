@@ -7,9 +7,22 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ============================================
-// Core Models
-// ============================================
+// ═══════════════════════════════════════════════════════════════════════════
+// ANGEL MEMORY OS — 8-layer memory system
+//
+// Layer A: CoreBlock          (always-injected named blocks)
+// Layer B: WorkingState       (ephemeral session scratchpad with TTL)
+// Layer C: Observation        (append-only raw events, immutable)
+// Layer D: Episode            (bounded interactions with evidence refs)
+// Layer E: Fact               (bi-temporal semantic facts with provenance)
+// Layer F: Procedure          (learned operating rules)
+// Layer G: Reflection         (higher-order synthesis)
+// Layer H: RawAsset           (immutable raw artifacts — deferred, schema-ready)
+//
+// Plus: Entity + EntityEdge (relationship graph), RetrievalAudit, MemoryAuditLog.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ─── User / Session / Auth (unchanged from v1) ──────────────────────────────
 
 model User {
   id             String    @id @default(uuid())
@@ -18,170 +31,371 @@ model User {
   name           String?
   provider       String    @default("email")
   providerUserId String?
-  apiKeys        Json?     // encrypted BYOK keys
-  plan           String    @default("free") // free | pro
+  apiKeys        Json?
+  plan           String    @default("free")
+  privacyMode    String    @default("standard") // off | standard | private_meeting
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  sessions    Session[]
-  episodes    Episode[]
-  memories    Memory[]
-  entities    Entity[]
-  reflections Reflection[]
-  coreMemory  CoreMemory?
-  skills      Skill[]
-  voiceprint  Voiceprint?
+  sessions       Session[]
+  observations   Observation[]
+  workingState   WorkingState[]
+  episodes       Episode[]
+  facts          Fact[]
+  procedures     Procedure[]
+  reflections    Reflection[]
+  coreBlocks     CoreBlock[]
+  entities       Entity[]
+  rawAssets      RawAsset[]
+  retrievalAudit RetrievalAudit[]
+  memoryAudit    MemoryAuditLog[]
+  skills         Skill[]
+  voiceprint     Voiceprint?
 }
 
 model Session {
-  id        String    @id @default(uuid())
-  userId    String
-  startedAt DateTime  @default(now())
-  endedAt   DateTime?
-  summary   Json?
-  speakers  Json?     // { "speaker_0": "Owner", "speaker_1": "Sarah" }
-  skills    String[]  // active skill IDs during session
-  status    String    @default("active") // active | ended | processing
+  id           String    @id @default(uuid())
+  userId       String
+  startedAt    DateTime  @default(now())
+  endedAt      DateTime?
+  mode         String    @default("intelligence") // translation | intelligence | hybrid | code
+  summary      Json?
+  speakers     Json?
+  location     String?
+  privacyMode  String    @default("standard")
+  status       String    @default("active") // active | processing | ended
+  skills       String[]
 
-  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  episodes Episode[]
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  observations Observation[]
+  episodes     Episode[]
+  workingState WorkingState[]
 
+  @@index([userId])
+  @@index([status])
+  @@index([startedAt])
+}
+
+// ─── Layer A: CoreBlock — always-injected named blocks ──────────────────────
+// Named blocks (persona, user_profile, safety, mission, device_env, style, etc)
+// Deterministic: injected verbatim into system prompt every turn, never retrieved.
+// Versioned and optionally read_only.
+
+model CoreBlock {
+  id         String   @id @default(uuid())
+  userId     String
+  label      String   // persona | user_profile | safety | mission | comm_style | device_env | ...
+  value      String   // markdown-ish plain text
+  version    Int      @default(1)
+  readOnly   Boolean  @default(false)
+  tokenCount Int      @default(0) // rough estimate for budget enforcement
+  updatedAt  DateTime @updatedAt
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, label])
   @@index([userId])
 }
 
-// ============================================
-// Layer 1: Episodes (raw transcript segments)
-// ============================================
+// ─── Layer B: WorkingState — ephemeral session scratchpad ───────────────────
+// TTL'd key-value store. Active session summary, open loops, current topic,
+// pending tool calls. Purged on TTL expiry or session end.
+
+model WorkingState {
+  id         String    @id @default(uuid())
+  userId     String
+  sessionId  String?
+  key        String    // current_topic | open_loops | active_meeting | pending_tool_calls | interruption_mode | ...
+  value      Json
+  ttlAt      DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session Session? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sessionId, key])
+  @@index([userId])
+  @@index([ttlAt])
+}
+
+// ─── Layer C: Observation — append-only raw events ──────────────────────────
+// Immutable raw events (transcript chunks, tool results, scene events).
+// Partitioned by observedAt in future; for now indexed only.
+// content_ref points to RawAsset if media-backed.
+
+model Observation {
+  id                String    @id @default(uuid())
+  userId            String
+  sessionId         String?
+  observedAt        DateTime  @default(now())
+  modality          String    // audio_transcript | tool_event | scene | ocr | user_command | system_event
+  source            String    // deepgram | realtime_api | tool:<name> | manual
+  speaker           String?   // Owner | speaker_1 | ...
+  content           String    // light summary or transcript text
+  payload           Json?     // arbitrary structured payload (tool inputs/outputs, OCR text, etc)
+  importance        Int       @default(5) // 0-10
+  privacyClass      String    @default("public") // public | private | sensitive | regulated | do_not_store
+  contentRef        String?   // S3/raw asset URI if applicable
+  extractorVersions Json?     // { asr: "v12", vad: "v3", diarization: "v2" }
+  entities          String[]  // entity IDs mentioned
+  locality          Json?     // { location_label, meeting_id, etc }
+  embedding         Unsupported("vector(1536)")?
+  schemaVersion     Int       @default(1)
+  processed         Boolean   @default(false) // memory judge consumed this?
+  createdAt         DateTime  @default(now())
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session Session? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([userId, observedAt(sort: Desc)])
+  @@index([userId, processed])
+  @@index([sessionId])
+  @@index([modality])
+}
+
+// ─── Layer D: Episode — bounded interactions with evidence refs ─────────────
+// A meaningful bounded memory unit produced by memory judge from many observations.
 
 model Episode {
-  id        String   @id @default(uuid())
-  sessionId String
-  userId    String
-  speaker   String   // "owner", "speaker_1", etc.
-  content   String
-  startTime DateTime
-  endTime   DateTime
+  id                   String    @id @default(uuid())
+  userId               String
+  sessionId            String?
+  timeStart            DateTime
+  timeEnd              DateTime
+  title                String
+  summary              String
+  importance           Int       @default(5) // 0-10
+  confidence           Float     @default(0.7) // 0-1
+  status               String    @default("active") // active | archived | superseded
+  sourceObservationIds String[]  // provenance chain
+  entityIds            String[]
+  actors               String[]  // speakers present in the episode
+  salience             Json?     // e.g. { "decision_made": true, "emotional_peak": "frustrated" }
+  embedding            Unsupported("vector(1536)")?
+  schemaVersion        Int       @default(1)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
-  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session Session? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
+  @@index([userId, timeEnd(sort: Desc)])
+  @@index([userId, importance(sort: Desc)])
   @@index([sessionId])
-  @@index([userId])
+  @@index([status])
 }
 
-// ============================================
-// Layer 2: Memories (extracted facts)
-// ============================================
+// ─── Layer E: Fact — bi-temporal semantic facts with provenance ─────────────
+// Durable typed beliefs. Subject-predicate-object structure with confidence,
+// freshness, validity interval, supersession chain.
 
-model Memory {
-  id          String    @id @default(uuid())
-  userId      String
-  content     String
-  embedding   Unsupported("vector(1536)")?
-  importance  Int       @default(5) // 1-10
-  accessCount Int       @default(0)
-  lastAccessed DateTime?
-  validFrom   DateTime  @default(now())
-  validTo     DateTime? // null = still valid
-  source      String?   // session ID or "manual"
-  category    String?   // fact, preference, opinion, event
-  createdAt   DateTime  @default(now())
+model Fact {
+  id                   String    @id @default(uuid())
+  userId               String
+  namespace            String    @default("general") // general | preference | person | company | relationship | ...
+  subjectType          String    // user | person | org | topic | system
+  subjectId            String?   // entity id if applicable
+  subjectName          String    // denormalized for display/search
+  predicate            String    // prefers | works_at | likes | born_on | scheduled_for | ...
+  objectType           String    // string | number | boolean | date | entity | json
+  objectValue          Json      // typed value (string, number, date ISO, entity ref, etc)
+  content              String    // natural-language rendering for display + embedding
+  confidence           Float     @default(0.7) // 0-1
+  importance           Int       @default(5) // 0-10
+  status               String    @default("candidate") // candidate | active | contested | superseded | expired | deleted
+  validFrom            DateTime  @default(now())
+  validTo              DateTime? // null = still current; closes on SUPERSEDE
+  freshnessAt          DateTime  @default(now()) // last reinforcement
+  expiresAt            DateTime? // explicit expiry if policy demands
+  supersededBy         String?   // fact id that replaces this one
+  sourceEpisodeIds     String[]
+  sourceObservationIds String[]
+  accessCount          Int       @default(0)
+  lastAccessed         DateTime?
+  privacyClass         String    @default("public")
+  embedding            Unsupported("vector(1536)")?
+  tags                 String[]  // A-MEM style freeform tags
+  linkedFactIds        String[]  // A-MEM style related fact links
+  extractorVersion     String    @default("judge-v1")
+  schemaVersion        Int       @default(1)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId])
+  @@index([userId, status])
+  @@index([userId, namespace, status])
+  @@index([userId, subjectId, predicate])
+  @@index([userId, freshnessAt(sort: Desc)])
+  @@index([validTo])
 }
 
-// ============================================
-// Layer 3: Entities (people, places, topics)
-// ============================================
+// ─── Layer F: Procedure — learned operating rules ───────────────────────────
 
-model Entity {
-  id        String   @id @default(uuid())
-  userId    String
-  name      String
-  type      String   // person, place, org, topic
-  aliases   String[] // ["Sarah", "Sarah Chen", "Dr. Chen"]
-  metadata  Json?    // freeform attributes
-  embedding Unsupported("vector(1536)")?
-  createdAt DateTime @default(now())
+model Procedure {
+  id                 String    @id @default(uuid())
+  userId             String
+  triggerSignature   String    // what situation activates this rule
+  policyText         String    // the rule itself, plain text
+  category           String    @default("behavior") // behavior | format | timing | priority | ...
+  examples           Json      // [{ situation, correct_response }] — few-shot for the model
+  sourceEpisodeIds   String[]
+  confidence         Float     @default(0.6)
+  status             String    @default("candidate") // candidate | active | deprecated
+  successCount       Int       @default(0)
+  failureCount       Int       @default(0)
+  lastUsedAt         DateTime?
+  reviewAt           DateTime?
+  schemaVersion      Int       @default(1)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
-  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  relationsFrom Relationship[] @relation("from")
-  relationsTo   Relationship[] @relation("to")
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId])
-  @@index([userId, type])
+  @@index([userId, status])
+  @@index([triggerSignature])
 }
 
-// ============================================
-// Layer 4: Relationships (temporal graph edges)
-// ============================================
-
-model Relationship {
-  id        String    @id @default(uuid())
-  fromId    String
-  toId      String
-  type      String    // works_with, discussed, friend_of, etc.
-  weight    Float     @default(1.0)
-  validFrom DateTime  @default(now())
-  validTo   DateTime? // null = still valid
-  source    String?   // session ID
-
-  from Entity @relation("from", fields: [fromId], references: [id], onDelete: Cascade)
-  to   Entity @relation("to", fields: [toId], references: [id], onDelete: Cascade)
-
-  @@index([fromId])
-  @@index([toId])
-}
-
-// ============================================
-// Layer 5: Reflections (higher-order insights)
-// ============================================
+// ─── Layer G: Reflection — higher-order synthesis ───────────────────────────
 
 model Reflection {
-  id             String   @id @default(uuid())
-  userId         String
-  content        String
-  embedding      Unsupported("vector(1536)")?
-  importance     Int      @default(7)
-  sourceMemories String[] // memory IDs that triggered this
-  createdAt      DateTime @default(now())
+  id                    String    @id @default(uuid())
+  userId                String
+  timeWindowStart       DateTime
+  timeWindowEnd         DateTime
+  summary               String
+  themes                String[]  // ["relationship_patterns", "meeting_preferences", ...]
+  importance            Int       @default(7)
+  confidence            Float     @default(0.7)
+  supportingEpisodeIds  String[]
+  supportingFactIds     String[]
+  triggerKind           String    // importance_burst | time_window | session_end | day_end | manual
+  embedding             Unsupported("vector(1536)")?
+  schemaVersion         Int       @default(1)
+  createdAt             DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, importance(sort: Desc)])
+}
+
+// ─── Layer H: RawAsset — immutable raw artifacts (S3-ready, deferred) ───────
+// Schema exists so observations.contentRef can point here when v2 adds S3.
+
+model RawAsset {
+  id              String    @id @default(uuid())
+  userId          String
+  observedAt      DateTime
+  modality        String    // audio | image | video | document
+  uri             String    // s3://bucket/key or file://path
+  sha256          String?
+  bytes           Int       @default(0)
+  kmsKeyId        String?
+  retentionClass  String    @default("short") // short | medium | long | permanent
+  deleteAfter     DateTime?
+  objectLockMode  String?   // governance | compliance | none
+  createdAt       DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, observedAt(sort: Desc)])
+  @@index([deleteAfter])
+  @@index([sha256])
+}
+
+// ─── Entities + EntityEdges (relationship graph) ────────────────────────────
+
+model Entity {
+  id            String   @id @default(uuid())
+  userId        String
+  entityType    String   // person | org | place | topic | object | product
+  canonicalName String
+  aliases       String[]
+  metadata      Json?
+  embedding     Unsupported("vector(1536)")?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  edgesFrom EntityEdge[] @relation("edgesFrom")
+  edgesTo   EntityEdge[] @relation("edgesTo")
 
   @@index([userId])
+  @@index([userId, entityType])
+  @@index([userId, canonicalName])
 }
 
-// ============================================
-// Layer 6: Core Memory (self-editing user profile)
-// ============================================
+model EntityEdge {
+  id            String    @id @default(uuid())
+  userId        String
+  fromEntityId  String
+  toEntityId    String
+  relationType  String
+  weight        Float     @default(1.0)
+  validFrom     DateTime  @default(now())
+  validTo       DateTime?
+  evidenceIds   String[]  // fact/episode/observation ids
+  updatedAt     DateTime  @updatedAt
 
-model CoreMemory {
-  id          String   @id @default(uuid())
-  userId      String   @unique
-  userProfile String   @default("")
-  preferences String   @default("")
-  keyPeople   String   @default("")
-  activeGoals String   @default("")
-  updatedAt   DateTime @updatedAt
+  from Entity @relation("edgesFrom", fields: [fromEntityId], references: [id], onDelete: Cascade)
+  to   Entity @relation("edgesTo", fields: [toEntityId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([fromEntityId, relationType])
+  @@index([toEntityId, relationType])
+}
+
+// ─── Audit logs (mandatory per PRD §19) ─────────────────────────────────────
+
+model RetrievalAudit {
+  id              String   @id @default(uuid())
+  userId          String
+  responseId      String?  // external id if we want to correlate with a whisper
+  queryText       String
+  usedMemoryIds   Json     // { facts: [...], episodes: [...], reflections: [...] }
+  reasonCodes     String[] // ["relevance>0.7", "recency_fresh", "high_importance", ...]
+  latencyMs       Int
+  createdAt       DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([responseId])
 }
 
-// ============================================
-// Skills
-// ============================================
+model MemoryAuditLog {
+  id         String   @id @default(uuid())
+  userId     String
+  actorType  String   // user | system | llm_judge | reflection_job | retention_job
+  actorId    String?
+  operation  String   // create | update | supersede | delete | access | forget
+  memoryType String   // fact | episode | reflection | procedure | core_block | observation
+  memoryId   String
+  before     Json?
+  after      Json?
+  reason     String?
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([memoryType, memoryId])
+}
+
+// ─── Unchanged from v1 ──────────────────────────────────────────────────────
 
 model Skill {
-  id           String  @id @default(uuid())
+  id           String   @id @default(uuid())
   userId       String
   name         String
   trigger      String?
   systemPrompt String
   outputSchema Json?
-  visibility   String  @default("private") // private | public
-  downloads    Int     @default(0)
+  visibility   String   @default("private")
+  downloads    Int      @default(0)
   createdAt    DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -189,10 +403,6 @@ model Skill {
   @@index([userId])
   @@index([visibility])
 }
-
-// ============================================
-// Voiceprint (speaker verification)
-// ============================================
 
 model Voiceprint {
   id          String   @id @default(uuid())

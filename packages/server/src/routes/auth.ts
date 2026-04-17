@@ -33,8 +33,7 @@ authRouter.post('/register', async (req: Request, res: Response) => {
       data: { email, passwordHash, name, provider: 'email' },
     });
 
-    // Create empty core memory
-    await prisma.coreMemory.create({ data: { userId: user.id } });
+    // Core blocks are lazily initialized by CoreBlocksService.ensureDefaults on first access
 
     const accessToken = generateToken(user.id);
     const refreshToken = generateRefreshToken(user.id);
@@ -149,8 +148,7 @@ authRouter.post('/apple', async (req: Request, res: Response) => {
         },
       });
 
-      // Create empty core memory
-      await prisma.coreMemory.create({ data: { userId: user.id } });
+      // Core blocks are lazily initialized on first access
     }
 
     const accessToken = generateToken(user.id);
@@ -202,44 +200,8 @@ authRouter.post('/refresh', async (req: Request, res: Response) => {
 authRouter.delete('/account', authenticateToken, async (req: AuthRequest, res: Response) => {
   try {
     const userId = req.userId!;
-
-    // Get all session IDs for episode cleanup
-    const sessions = await prisma.session.findMany({
-      where: { userId },
-      select: { id: true },
-    });
-    const sessionIds = sessions.map((s: { id: string }) => s.id);
-
-    // Get all entity IDs for relationship cleanup
-    const entities = await prisma.entity.findMany({
-      where: { userId },
-      select: { id: true },
-    });
-    const entityIds = entities.map((e: { id: string }) => e.id);
-
-    // Delete everything in a transaction respecting foreign key order
-    await prisma.$transaction([
-      // 1. Episodes (reference sessions)
-      prisma.episode.deleteMany({ where: { sessionId: { in: sessionIds } } }),
-      // 2. Sessions
-      prisma.session.deleteMany({ where: { userId } }),
-      // 3. Memories
-      prisma.memory.deleteMany({ where: { userId } }),
-      // 4. Relationships (reference entities)
-      prisma.relationship.deleteMany({
-        where: { OR: [{ fromId: { in: entityIds } }, { toId: { in: entityIds } }] },
-      }),
-      // 5. Entities
-      prisma.entity.deleteMany({ where: { userId } }),
-      // 6. Reflections
-      prisma.reflection.deleteMany({ where: { userId } }),
-      // 7. Core Memory
-      prisma.coreMemory.deleteMany({ where: { userId } }),
-      // 8. Skills
-      prisma.skill.deleteMany({ where: { userId } }),
-      // 9. User
-      prisma.user.delete({ where: { id: userId } }),
-    ]);
+    // All memory layers and session data cascade-delete via User onDelete: Cascade.
+    await prisma.user.delete({ where: { id: userId } });
 
     res.json({ success: true });
   } catch (err) {

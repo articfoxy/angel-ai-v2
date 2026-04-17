@@ -26,7 +26,7 @@ sessionsRouter.get('/:id', async (req: AuthRequest, res: Response) => {
   try {
     const session = await prisma.session.findFirst({
       where: { id: String(req.params.id), userId: String(req.userId) },
-      include: { episodes: { orderBy: { startTime: 'asc' } } },
+      include: { episodes: { orderBy: { timeStart: 'asc' } } },
     });
 
     if (!session) {

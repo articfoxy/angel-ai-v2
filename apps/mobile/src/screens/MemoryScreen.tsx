@@ -1,4 +1,16 @@
-import React, { useState, useCallback } from 'react';
+/**
+ * MemoryScreen — Angel Memory OS v2 browser.
+ *
+ * Five tabs matching the memory layers:
+ *   Core      — editable named blocks (persona, user_profile, etc)
+ *   Facts     — bi-temporal semantic facts w/ confidence + forget
+ *   Episodes  — bounded interaction summaries
+ *   Habits    — learned procedures (approve / deprecate)
+ *   Thoughts  — reflections
+ *
+ * Plus: privacy-mode toggle at the top.
+ */
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -12,289 +24,294 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
-import { colors, spacing, fontSize } from '../theme';
-import type { CoreMemory, Entity, Memory, Reflection } from '../types';
+import { colors, spacing, fontSize, radius } from '../theme';
 
-type MemoryTab = 'core' | 'entities' | 'memories' | 'reflections';
+type Tab = 'core' | 'facts' | 'episodes' | 'habits' | 'thoughts';
+
+interface CoreBlock { id: string; label: string; value: string; version: number; readOnly: boolean; tokenCount: number; updatedAt: string }
+interface Fact { id: string; content: string; subjectName: string; predicate: string; confidence: number; importance: number; status: string; freshnessAt: string; createdAt: string; tags: string[]; accessCount: number }
+interface Episode { id: string; title: string; summary: string; timeStart: string; timeEnd: string; importance: number; confidence: number; status: string }
+interface Procedure { id: string; triggerSignature: string; policyText: string; category: string; confidence: number; status: string; successCount: number; failureCount: number; createdAt: string }
+interface Reflection { id: string; summary: string; themes: string[]; importance: number; confidence: number; timeWindowStart: string; timeWindowEnd: string; triggerKind: string; createdAt: string }
+
+type PrivacyMode = 'off' | 'standard' | 'private_meeting';
 
 export function MemoryScreen() {
   const insets = useSafeAreaInsets();
-  const [activeTab, setActiveTab] = useState<MemoryTab>('core');
-  const [editingField, setEditingField] = useState<string | null>(null);
-  const [editValue, setEditValue] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
-
-  const { data: coreMemory, isLoading: coreLoading, refetch: refetchCore } =
-    useApi<CoreMemory>('memory/core');
-  const { data: entities, isLoading: entitiesLoading, refetch: refetchEntities } =
-    useApi<Entity[]>('memory/entities');
-  const { data: memories, isLoading: memoriesLoading, refetch: refetchMemories } =
-    useApi<Memory[]>('memory/memories?limit=50');
-  const { data: reflections, isLoading: reflectionsLoading, refetch: refetchReflections } =
-    useApi<Reflection[]>('memory/reflections');
-
+  const [activeTab, setActiveTab] = useState<Tab>('core');
   const [refreshing, setRefreshing] = useState(false);
+
+  const [blocks, setBlocks] = useState<CoreBlock[]>([]);
+  const [facts, setFacts] = useState<Fact[]>([]);
+  const [episodes, setEpisodes] = useState<Episode[]>([]);
+  const [procedures, setProcedures] = useState<Procedure[]>([]);
+  const [reflections, setReflections] = useState<Reflection[]>([]);
+  const [privacy, setPrivacy] = useState<PrivacyMode>('standard');
+
+  const [editingBlock, setEditingBlock] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState('');
+
+  const loadAll = useCallback(async () => {
+    try {
+      const [bRes, fRes, eRes, pRes, rRes, privRes] = await Promise.allSettled([
+        api.get<CoreBlock[]>('memory/core'),
+        api.get<Fact[]>('memory/facts?status=all'),
+        api.get<Episode[]>('memory/episodes'),
+        api.get<Procedure[]>('memory/procedures'),
+        api.get<Reflection[]>('memory/reflections'),
+        api.get<{ mode: PrivacyMode }>('memory/privacy'),
+      ]);
+      if (bRes.status === 'fulfilled') setBlocks(bRes.value || []);
+      if (fRes.status === 'fulfilled') setFacts(fRes.value || []);
+      if (eRes.status === 'fulfilled') setEpisodes(eRes.value || []);
+      if (pRes.status === 'fulfilled') setProcedures(pRes.value || []);
+      if (rRes.status === 'fulfilled') setReflections(rRes.value || []);
+      if (privRes.status === 'fulfilled') setPrivacy(((privRes.value as any)?.mode as PrivacyMode) ?? 'standard');
+    } catch {}
+  }, []);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([refetchCore(), refetchEntities(), refetchMemories(), refetchReflections()]);
+    await loadAll();
     setRefreshing(false);
-  }, [refetchCore, refetchEntities, refetchMemories, refetchReflections]);
+  }, [loadAll]);
 
-  const handleSaveCoreField = async (field: string, value: string) => {
-    await api.patch('memory/core', { [field]: value });
-    refetchCore();
-    setEditingField(null);
+  const saveBlock = async (label: string) => {
+    try {
+      await api.patch(`memory/core/${label}`, { value: editValue });
+      setEditingBlock(null);
+      await loadAll();
+    } catch (e: any) {
+      Alert.alert('Error', e?.message || 'Failed to save');
+    }
   };
 
-  const renderCoreMemoryBlock = (label: string, field: string, value: string, icon: keyof typeof Ionicons.glyphMap) => {
-    const isEditing = editingField === field;
-    return (
-      <View key={field} style={styles.coreBlock}>
-        <View style={styles.coreBlockHeader}>
-          <Ionicons name={icon} size={16} color={colors.primary} />
-          <Text style={styles.coreBlockLabel}>{label}</Text>
-          <TouchableOpacity
-            onPress={() => {
-              if (isEditing) {
-                handleSaveCoreField(field, editValue);
-              } else {
-                setEditingField(field);
-                setEditValue(value);
-              }
-            }}
-          >
-            <Ionicons
-              name={isEditing ? 'checkmark' : 'create-outline'}
-              size={18}
-              color={isEditing ? colors.success : colors.textTertiary}
-            />
-          </TouchableOpacity>
-        </View>
-        {isEditing ? (
-          <TextInput
-            style={styles.coreInput}
-            value={editValue}
-            onChangeText={setEditValue}
-            multiline
-            autoFocus
-            placeholderTextColor={colors.textTertiary}
-            placeholder={`What does Angel know about your ${label.toLowerCase()}?`}
-          />
-        ) : (
-          <Text style={styles.coreBlockText}>
-            {value || `No ${label.toLowerCase()} recorded yet`}
-          </Text>
-        )}
-      </View>
+  const forgetFact = (factId: string, content: string) => {
+    Alert.alert(
+      'Forget this fact?',
+      content.slice(0, 120),
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Forget', style: 'destructive', onPress: async () => {
+          await api.delete(`memory/facts/${factId}`);
+          await loadAll();
+        }},
+      ],
     );
   };
 
-  const TABS: { key: MemoryTab; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
-    { key: 'core', label: 'Core', icon: 'heart' },
-    { key: 'entities', label: 'Entities', icon: 'people' },
-    { key: 'memories', label: 'Facts', icon: 'document-text' },
-    { key: 'reflections', label: 'Insights', icon: 'sparkles' },
-  ];
+  const approveProcedure = async (id: string) => {
+    await api.post(`memory/procedures/${id}/approve`, {});
+    await loadAll();
+  };
+  const deprecateProcedure = async (id: string) => {
+    await api.delete(`memory/procedures/${id}`);
+    await loadAll();
+  };
 
-  const query = searchQuery.trim().toLowerCase();
-
-  const filteredEntities = Array.isArray(entities)
-    ? entities.filter((e) => !query || e.name.toLowerCase().includes(query) || e.aliases.some((a: string) => a.toLowerCase().includes(query)))
-    : [];
-
-  const filteredMemories = Array.isArray(memories)
-    ? memories.filter((m) => !query || m.content.toLowerCase().includes(query) || (m.category && m.category.toLowerCase().includes(query)))
-    : [];
-
-  const filteredReflections = Array.isArray(reflections)
-    ? reflections.filter((r) => !query || r.content.toLowerCase().includes(query))
-    : [];
+  const setPrivacyMode = async (mode: PrivacyMode) => {
+    await api.post('memory/privacy', { mode });
+    setPrivacy(mode);
+  };
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
+      {/* Header */}
       <View style={styles.header}>
         <Text style={styles.title}>Memory</Text>
-        <Text style={styles.subtitle}>What Angel knows about your world</Text>
+        <View style={styles.privacyRow}>
+          {(['off', 'standard', 'private_meeting'] as const).map((m) => (
+            <TouchableOpacity
+              key={m}
+              style={[styles.privacyChip, privacy === m && styles.privacyChipActive]}
+              onPress={() => setPrivacyMode(m)}
+            >
+              <Text style={[styles.privacyText, privacy === m && styles.privacyTextActive]}>
+                {m === 'off' ? 'Off' : m === 'standard' ? 'Standard' : 'Private'}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
       </View>
 
-      {/* Search Bar */}
-      <View style={styles.searchContainer}>
-        <Ionicons name="search" size={16} color={colors.textTertiary} />
-        <TextInput
-          style={styles.searchInput}
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          placeholder="Search memories..."
-          placeholderTextColor={colors.textTertiary}
-          autoCapitalize="none"
-          autoCorrect={false}
-          clearButtonMode="while-editing"
-        />
-        {searchQuery.length > 0 && (
-          <TouchableOpacity onPress={() => setSearchQuery('')}>
-            <Ionicons name="close-circle" size={16} color={colors.textTertiary} />
-          </TouchableOpacity>
-        )}
-      </View>
-
-      {/* Tab Bar */}
-      <View style={styles.tabBar}>
-        {TABS.map((tab) => (
-          <TouchableOpacity
-            key={tab.key}
-            style={[styles.tab, activeTab === tab.key && styles.tabActive]}
-            onPress={() => setActiveTab(tab.key)}
-          >
-            <Ionicons
-              name={tab.icon}
-              size={16}
-              color={activeTab === tab.key ? colors.primary : colors.textTertiary}
-            />
-            <Text style={[styles.tabLabel, activeTab === tab.key && styles.tabLabelActive]}>
-              {tab.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
+      {/* Tabs */}
+      <View style={styles.tabsWrap}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabs}>
+          {(['core', 'facts', 'episodes', 'habits', 'thoughts'] as Tab[]).map((t) => (
+            <TouchableOpacity
+              key={t}
+              style={[styles.tab, activeTab === t && styles.tabActive]}
+              onPress={() => setActiveTab(t)}
+            >
+              <Text style={[styles.tabLabel, activeTab === t && styles.tabLabelActive]}>
+                {t === 'core' ? 'Core' : t === 'facts' ? `Facts (${facts.length})` : t === 'episodes' ? `Episodes (${episodes.length})` : t === 'habits' ? `Habits (${procedures.length})` : `Reflections (${reflections.length})`}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
       </View>
 
       <ScrollView
         contentContainerStyle={styles.content}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
-        }
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       >
+        {/* ─── CORE ─── */}
         {activeTab === 'core' && (
-          coreLoading ? (
-            <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.xl }} />
-          ) : (
-            <View style={styles.coreSection}>
-              {renderCoreMemoryBlock('User Profile', 'userProfile', coreMemory?.userProfile || '', 'person')}
-              {renderCoreMemoryBlock('Preferences', 'preferences', coreMemory?.preferences || '', 'options')}
-              {renderCoreMemoryBlock('Key People', 'keyPeople', coreMemory?.keyPeople || '', 'people')}
-              {renderCoreMemoryBlock('Active Goals', 'activeGoals', coreMemory?.activeGoals || '', 'flag')}
-            </View>
-          )
-        )}
-
-        {activeTab === 'entities' && (
-          entitiesLoading ? (
-            <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.xl }} />
-          ) : filteredEntities.length > 0 ? (
-            filteredEntities.map((entity) => (
-              <View key={entity.id} style={styles.entityCard}>
-                <View style={styles.entityHeader}>
-                  <Ionicons
-                    name={entity.type === 'person' ? 'person' : entity.type === 'org' ? 'business' : 'pricetag'}
-                    size={16}
-                    color={colors.primary}
-                  />
-                  <Text style={styles.entityName}>{entity.name}</Text>
-                  <Text style={styles.entityType}>{entity.type}</Text>
+          <View style={{ gap: spacing.md }}>
+            {blocks.length === 0 && <Text style={styles.empty}>No core blocks yet.</Text>}
+            {blocks.map((b) => (
+              <View key={b.id} style={styles.card}>
+                <View style={styles.cardHeader}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.blockLabel}>{b.label.replace(/_/g, ' ').toUpperCase()}</Text>
+                    <Text style={styles.blockMeta}>v{b.version} · ~{b.tokenCount} tokens{b.readOnly ? ' · read-only' : ''}</Text>
+                  </View>
+                  {!b.readOnly && editingBlock !== b.label && (
+                    <TouchableOpacity onPress={() => { setEditingBlock(b.label); setEditValue(b.value); }}>
+                      <Ionicons name="pencil-outline" size={16} color={colors.primary} />
+                    </TouchableOpacity>
+                  )}
                 </View>
-                {entity.aliases.length > 0 && (
-                  <Text style={styles.entityAliases}>
-                    Also known as: {entity.aliases.join(', ')}
-                  </Text>
+                {editingBlock === b.label ? (
+                  <>
+                    <TextInput
+                      style={styles.editInput}
+                      value={editValue}
+                      onChangeText={setEditValue}
+                      multiline
+                      placeholder="(empty)"
+                      placeholderTextColor={colors.textTertiary}
+                    />
+                    <View style={styles.editActions}>
+                      <TouchableOpacity onPress={() => setEditingBlock(null)}>
+                        <Text style={styles.editCancel}>Cancel</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => saveBlock(b.label)} style={styles.editSaveBtn}>
+                        <Text style={styles.editSave}>Save</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                ) : (
+                  <Text style={styles.blockValue}>{b.value || <Text style={styles.empty}>(empty — tap edit to add)</Text>}</Text>
                 )}
               </View>
-            ))
-          ) : query ? (
-            <View style={styles.emptyState}>
-              <Ionicons name="search-outline" size={32} color={colors.textTertiary} />
-              <Text style={styles.emptyText}>No results</Text>
-              <Text style={styles.emptySubtext}>No entities match "{searchQuery}"</Text>
-            </View>
-          ) : (
-            <View style={styles.emptyState}>
-              <Ionicons name="people-outline" size={32} color={colors.textTertiary} />
-              <Text style={styles.emptyText}>No entities yet</Text>
-              <Text style={styles.emptySubtext}>Angel will learn about people and topics from your conversations</Text>
-            </View>
-          )
+            ))}
+          </View>
         )}
 
-        {activeTab === 'memories' && (
-          memoriesLoading ? (
-            <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.xl }} />
-          ) : filteredMemories.length > 0 ? (
-            filteredMemories.map((memory) => (
-              <View key={memory.id} style={styles.memoryCard}>
-                <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
-                  <Text style={[styles.memoryContent, { flex: 1 }]}>{memory.content}</Text>
-                  <TouchableOpacity
-                    onPress={() => {
-                      Alert.alert('Delete Memory', 'Remove this memory?', [
-                        { text: 'Cancel', style: 'cancel' },
-                        {
-                          text: 'Delete', style: 'destructive',
-                          onPress: async () => {
-                            try { await api.delete(`memory/memories/${memory.id}`); refetchMemories(); } catch {}
-                          },
-                        },
-                      ]);
-                    }}
-                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  >
-                    <Ionicons name="trash-outline" size={16} color={colors.textTertiary} />
+        {/* ─── FACTS ─── */}
+        {activeTab === 'facts' && (
+          <View style={{ gap: spacing.sm }}>
+            {facts.length === 0 && <Text style={styles.empty}>No facts yet. Talk to Angel — they'll build up.</Text>}
+            {facts.map((f) => (
+              <View key={f.id} style={styles.factCard}>
+                <View style={styles.factMeta}>
+                  <View style={[styles.statusPill, f.status === 'active' ? styles.statusActive : styles.statusCandidate]}>
+                    <Text style={styles.statusText}>{f.status}</Text>
+                  </View>
+                  <Text style={styles.factConfidence}>conf {(f.confidence * 100).toFixed(0)}%</Text>
+                  <Text style={styles.factImportance}>imp {f.importance}</Text>
+                  <Text style={styles.factAccess}>✨ {f.accessCount}</Text>
+                  <View style={{ flex: 1 }} />
+                  <TouchableOpacity onPress={() => forgetFact(f.id, f.content)}>
+                    <Ionicons name="trash-outline" size={14} color={colors.danger} />
                   </TouchableOpacity>
                 </View>
-                <View style={styles.memoryMeta}>
-                  {memory.category && (
-                    <View style={styles.memoryBadge}>
-                      <Text style={styles.memoryBadgeText}>{memory.category}</Text>
-                    </View>
-                  )}
-                  <Text style={styles.memoryImportance}>
-                    Importance: {memory.importance}/10
-                  </Text>
-                </View>
+                <Text style={styles.factContent}>{f.content}</Text>
+                <Text style={styles.factDetail}>{f.subjectName} · {f.predicate}</Text>
+                {f.tags.length > 0 && (
+                  <View style={styles.factTags}>
+                    {f.tags.slice(0, 5).map((t) => (
+                      <Text key={t} style={styles.tag}>#{t}</Text>
+                    ))}
+                  </View>
+                )}
               </View>
-            ))
-          ) : query ? (
-            <View style={styles.emptyState}>
-              <Ionicons name="search-outline" size={32} color={colors.textTertiary} />
-              <Text style={styles.emptyText}>No results</Text>
-              <Text style={styles.emptySubtext}>No memories match "{searchQuery}"</Text>
-            </View>
-          ) : (
-            <View style={styles.emptyState}>
-              <Ionicons name="document-text-outline" size={32} color={colors.textTertiary} />
-              <Text style={styles.emptyText}>No memories yet</Text>
-              <Text style={styles.emptySubtext}>Facts will be extracted from your conversations</Text>
-            </View>
-          )
+            ))}
+          </View>
         )}
 
-        {activeTab === 'reflections' && (
-          reflectionsLoading ? (
-            <ActivityIndicator color={colors.primary} style={{ marginTop: spacing.xl }} />
-          ) : filteredReflections.length > 0 ? (
-            filteredReflections.map((reflection) => (
-              <View key={reflection.id} style={styles.reflectionCard}>
-                <Ionicons name="sparkles" size={16} color={colors.warning} />
-                <View style={styles.reflectionContent}>
-                  <Text style={styles.reflectionText}>{reflection.content}</Text>
-                  <Text style={styles.reflectionMeta}>
-                    Based on {reflection.sourceMemories?.length || 0} memories
-                  </Text>
+        {/* ─── EPISODES ─── */}
+        {activeTab === 'episodes' && (
+          <View style={{ gap: spacing.sm }}>
+            {episodes.length === 0 && <Text style={styles.empty}>No episodes yet.</Text>}
+            {episodes.map((e) => (
+              <View key={e.id} style={styles.card}>
+                <View style={styles.episodeHeader}>
+                  <Text style={styles.episodeTitle} numberOfLines={1}>{e.title}</Text>
+                  <Text style={styles.episodeDate}>{new Date(e.timeEnd).toLocaleDateString()}</Text>
+                </View>
+                <Text style={styles.factDetail}>imp {e.importance} · conf {(e.confidence * 100).toFixed(0)}%</Text>
+                <Text style={styles.episodeSummary}>{e.summary}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* ─── HABITS (Procedures) ─── */}
+        {activeTab === 'habits' && (
+          <View style={{ gap: spacing.sm }}>
+            {procedures.length === 0 && <Text style={styles.empty}>No learned habits yet.</Text>}
+            {procedures.map((p) => (
+              <View key={p.id} style={styles.card}>
+                <View style={styles.factMeta}>
+                  <View style={[styles.statusPill, p.status === 'active' ? styles.statusActive : p.status === 'candidate' ? styles.statusCandidate : styles.statusDeprecated]}>
+                    <Text style={styles.statusText}>{p.status}</Text>
+                  </View>
+                  <Text style={styles.factConfidence}>conf {(p.confidence * 100).toFixed(0)}%</Text>
+                  <Text style={styles.factAccess}>✅ {p.successCount} / ❌ {p.failureCount}</Text>
+                </View>
+                <Text style={styles.procedureTrigger}>when: {p.triggerSignature}</Text>
+                <Text style={styles.procedurePolicy}>{p.policyText}</Text>
+                <View style={styles.procActions}>
+                  {p.status === 'candidate' && (
+                    <TouchableOpacity onPress={() => approveProcedure(p.id)} style={styles.approveBtn}>
+                      <Ionicons name="checkmark" size={14} color={colors.success} />
+                      <Text style={styles.approveText}>Approve</Text>
+                    </TouchableOpacity>
+                  )}
+                  {p.status !== 'deprecated' && (
+                    <TouchableOpacity onPress={() => deprecateProcedure(p.id)} style={styles.deprecateBtn}>
+                      <Ionicons name="close" size={14} color={colors.danger} />
+                      <Text style={styles.deprecateText}>Deprecate</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               </View>
-            ))
-          ) : query ? (
-            <View style={styles.emptyState}>
-              <Ionicons name="search-outline" size={32} color={colors.textTertiary} />
-              <Text style={styles.emptyText}>No results</Text>
-              <Text style={styles.emptySubtext}>No insights match "{searchQuery}"</Text>
-            </View>
-          ) : (
-            <View style={styles.emptyState}>
-              <Ionicons name="sparkles-outline" size={32} color={colors.textTertiary} />
-              <Text style={styles.emptyText}>No insights yet</Text>
-              <Text style={styles.emptySubtext}>Angel will generate insights after several conversations</Text>
-            </View>
-          )
+            ))}
+          </View>
+        )}
+
+        {/* ─── REFLECTIONS ─── */}
+        {activeTab === 'thoughts' && (
+          <View style={{ gap: spacing.sm }}>
+            {reflections.length === 0 && <Text style={styles.empty}>No reflections yet. Angel thinks on session end + nightly.</Text>}
+            {reflections.map((r) => (
+              <View key={r.id} style={styles.card}>
+                <View style={styles.factMeta}>
+                  <View style={styles.reflectionTrigger}>
+                    <Text style={styles.reflectionTriggerText}>{r.triggerKind}</Text>
+                  </View>
+                  <Text style={styles.factConfidence}>conf {(r.confidence * 100).toFixed(0)}%</Text>
+                  <Text style={styles.factImportance}>imp {r.importance}</Text>
+                </View>
+                <Text style={styles.reflectionSummary}>{r.summary}</Text>
+                {r.themes.length > 0 && (
+                  <View style={styles.factTags}>
+                    {r.themes.slice(0, 4).map((t) => (
+                      <Text key={t} style={styles.themeTag}>{t.replace(/_/g, ' ')}</Text>
+                    ))}
+                  </View>
+                )}
+                <Text style={styles.factDetail}>
+                  {new Date(r.timeWindowStart).toLocaleDateString()} → {new Date(r.timeWindowEnd).toLocaleDateString()}
+                </Text>
+              </View>
+            ))}
+          </View>
         )}
       </ScrollView>
     </View>
@@ -303,140 +320,68 @@ export function MemoryScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
-  header: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
-  title: { color: colors.text, fontSize: fontSize.xxl, fontWeight: '700' },
-  subtitle: { color: colors.textSecondary, fontSize: fontSize.md, marginTop: spacing.xs },
-  searchContainer: {
+  header: {
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderRadius: 10,
-    marginHorizontal: spacing.md,
-    marginBottom: spacing.md,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    borderWidth: 1,
-    borderColor: colors.border,
-    gap: spacing.xs,
+    justifyContent: 'space-between',
   },
-  searchInput: {
-    flex: 1,
-    color: colors.text,
-    fontSize: fontSize.md,
-    paddingVertical: spacing.xs,
-  },
-  tabBar: {
-    flexDirection: 'row',
-    paddingHorizontal: spacing.md,
-    gap: spacing.xs,
-    marginBottom: spacing.md,
-  },
-  tab: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.xs,
-    paddingVertical: spacing.sm,
-    borderRadius: 10,
-    backgroundColor: colors.surface,
-  },
-  tabActive: {
-    backgroundColor: colors.surfaceHover,
-    borderWidth: 1,
-    borderColor: colors.primary + '40',
-  },
-  tabLabel: { color: colors.textTertiary, fontSize: fontSize.xs, fontWeight: '600' },
-  tabLabelActive: { color: colors.primary },
-  content: { paddingBottom: spacing.xl },
-  coreSection: { paddingHorizontal: spacing.md, gap: spacing.sm },
-  coreBlock: {
-    backgroundColor: colors.surface,
-    borderRadius: 12,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  coreBlockHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginBottom: spacing.sm,
-  },
-  coreBlockLabel: { color: colors.text, fontSize: fontSize.md, fontWeight: '600', flex: 1 },
-  coreBlockText: { color: colors.textSecondary, fontSize: fontSize.md, lineHeight: 22 },
-  coreInput: {
-    color: colors.text,
-    fontSize: fontSize.md,
-    lineHeight: 22,
-    backgroundColor: colors.surfaceHover,
-    borderRadius: 8,
-    padding: spacing.sm,
-    minHeight: 80,
-    textAlignVertical: 'top',
-  },
-  entityCard: {
-    backgroundColor: colors.surface,
-    borderRadius: 12,
-    padding: spacing.md,
-    marginHorizontal: spacing.md,
-    marginBottom: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  entityHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  entityName: { color: colors.text, fontSize: fontSize.lg, fontWeight: '600', flex: 1 },
-  entityType: {
-    color: colors.primary,
-    fontSize: fontSize.xs,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  entityAliases: { color: colors.textTertiary, fontSize: fontSize.sm, marginTop: spacing.xs },
-  memoryCard: {
-    backgroundColor: colors.surface,
-    borderRadius: 12,
-    padding: spacing.md,
-    marginHorizontal: spacing.md,
-    marginBottom: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  memoryContent: { color: colors.text, fontSize: fontSize.md, lineHeight: 20, marginBottom: spacing.sm },
-  memoryMeta: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  memoryBadge: {
-    backgroundColor: colors.primary + '20',
-    borderRadius: 6,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-  },
-  memoryBadgeText: { color: colors.primary, fontSize: fontSize.xs, fontWeight: '600' },
-  memoryImportance: { color: colors.textTertiary, fontSize: fontSize.xs },
-  reflectionCard: {
-    flexDirection: 'row',
-    backgroundColor: colors.surface,
-    borderRadius: 12,
-    padding: spacing.md,
-    marginHorizontal: spacing.md,
-    marginBottom: spacing.sm,
-    borderWidth: 1,
-    borderColor: colors.border,
-    gap: spacing.sm,
-  },
-  reflectionContent: { flex: 1 },
-  reflectionText: { color: colors.text, fontSize: fontSize.md, lineHeight: 20 },
-  reflectionMeta: { color: colors.textTertiary, fontSize: fontSize.xs, marginTop: spacing.xs },
-  emptyState: {
-    alignItems: 'center',
-    paddingVertical: spacing.xl * 2,
-    gap: spacing.sm,
-  },
-  emptyText: { color: colors.textSecondary, fontSize: fontSize.lg, fontWeight: '600' },
-  emptySubtext: {
-    color: colors.textTertiary,
-    fontSize: fontSize.md,
-    textAlign: 'center',
-    paddingHorizontal: spacing.xl,
-  },
+  title: { color: colors.text, fontSize: fontSize.xxl, fontWeight: '700', letterSpacing: -0.5 },
+  privacyRow: { flexDirection: 'row', backgroundColor: colors.surfaceRaised, borderRadius: 8, padding: 2, gap: 2 },
+  privacyChip: { paddingHorizontal: spacing.sm, paddingVertical: 5, borderRadius: 6 },
+  privacyChipActive: { backgroundColor: colors.bg },
+  privacyText: { color: colors.textSecondary, fontSize: 11, fontWeight: '500' },
+  privacyTextActive: { color: colors.text, fontWeight: '600' },
+  tabsWrap: { paddingBottom: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  tabs: { paddingHorizontal: spacing.md, gap: 6 },
+  tab: { paddingHorizontal: spacing.sm + 2, paddingVertical: 6, borderRadius: 999, backgroundColor: colors.surfaceRaised },
+  tabActive: { backgroundColor: colors.primaryMuted },
+  tabLabel: { color: colors.textSecondary, fontSize: 13, fontWeight: '500' },
+  tabLabelActive: { color: colors.primary, fontWeight: '700' },
+  content: { padding: spacing.md, paddingBottom: spacing.xxl },
+  empty: { color: colors.textTertiary, fontSize: fontSize.sm, textAlign: 'center', paddingVertical: spacing.xl },
+  card: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md, borderWidth: 1, borderColor: colors.border },
+  cardHeader: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: spacing.xs },
+  blockLabel: { color: colors.text, fontSize: fontSize.sm, fontWeight: '700', letterSpacing: 0.5 },
+  blockMeta: { color: colors.textTertiary, fontSize: 10, marginTop: 1 },
+  blockValue: { color: colors.text, fontSize: fontSize.sm, lineHeight: 20 },
+  editInput: { color: colors.text, fontSize: fontSize.sm, backgroundColor: colors.bg, borderRadius: radius.sm, padding: spacing.sm, marginTop: spacing.xs, minHeight: 80, textAlignVertical: 'top' },
+  editActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.md, marginTop: spacing.sm, alignItems: 'center' },
+  editCancel: { color: colors.textSecondary, fontSize: fontSize.sm },
+  editSaveBtn: { backgroundColor: colors.primary, paddingHorizontal: spacing.md, paddingVertical: spacing.xs + 2, borderRadius: radius.sm },
+  editSave: { color: '#fff', fontSize: fontSize.sm, fontWeight: '600' },
+  // Fact cards
+  factCard: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md, borderWidth: 1, borderColor: colors.border },
+  factMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  statusPill: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999 },
+  statusActive: { backgroundColor: 'rgba(52, 211, 153, 0.15)' },
+  statusCandidate: { backgroundColor: 'rgba(251, 191, 36, 0.15)' },
+  statusDeprecated: { backgroundColor: 'rgba(148, 163, 184, 0.15)' },
+  statusText: { color: colors.textSecondary, fontSize: 10, fontWeight: '700', letterSpacing: 0.5, textTransform: 'uppercase' },
+  factConfidence: { color: colors.textSecondary, fontSize: 10 },
+  factImportance: { color: colors.textSecondary, fontSize: 10 },
+  factAccess: { color: colors.textSecondary, fontSize: 10 },
+  factContent: { color: colors.text, fontSize: fontSize.sm, lineHeight: 20 },
+  factDetail: { color: colors.textTertiary, fontSize: 11, marginTop: 4 },
+  factTags: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 6 },
+  tag: { color: colors.primary, fontSize: 10, backgroundColor: colors.primaryMuted, paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4 },
+  // Episodes
+  episodeHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4, alignItems: 'center' },
+  episodeTitle: { color: colors.text, fontSize: fontSize.sm, fontWeight: '700', flex: 1 },
+  episodeDate: { color: colors.textTertiary, fontSize: 11 },
+  episodeSummary: { color: colors.text, fontSize: fontSize.sm, lineHeight: 20, marginTop: 6 },
+  // Procedures
+  procedureTrigger: { color: colors.textSecondary, fontSize: 11, fontStyle: 'italic', marginTop: 4 },
+  procedurePolicy: { color: colors.text, fontSize: fontSize.sm, lineHeight: 20, marginTop: 4 },
+  procActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
+  approveBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.sm, backgroundColor: 'rgba(52, 211, 153, 0.12)' },
+  approveText: { color: colors.success, fontSize: 12, fontWeight: '600' },
+  deprecateBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: spacing.sm, paddingVertical: 4, borderRadius: radius.sm, backgroundColor: 'rgba(248, 113, 113, 0.12)' },
+  deprecateText: { color: colors.danger, fontSize: 12, fontWeight: '600' },
+  // Reflections
+  reflectionTrigger: { backgroundColor: 'rgba(56, 189, 248, 0.15)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999 },
+  reflectionTriggerText: { color: '#38bdf8', fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
+  reflectionSummary: { color: colors.text, fontSize: fontSize.sm, lineHeight: 20 },
+  themeTag: { color: colors.textSecondary, fontSize: 10, backgroundColor: colors.surfaceRaised, paddingHorizontal: 6, paddingVertical: 1, borderRadius: 4 },
 });
