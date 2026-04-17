@@ -748,33 +748,26 @@ export function StartScreen() {
         </View>
       </View>
 
-      {/* Mode pills — tap to switch mid-session */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.modePillRow}
-      >
-        {ANGEL_MODES.map((m) => {
-          const selected = angelMode === m.id;
-          return (
-            <TouchableOpacity
-              key={m.id}
-              style={[styles.modePill, selected && styles.modePillActive]}
-              onPress={() => selectMode(m.id)}
-              activeOpacity={0.7}
-            >
-              <Ionicons
-                name={m.icon as any}
-                size={14}
-                color={selected ? colors.primary : colors.textSecondary}
-              />
-              <Text style={[styles.modePillLabel, selected && styles.modePillLabelActive]}>
-                {m.label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
+      {/* Mode selector — iOS-style segmented control */}
+      <View style={styles.segmentedControlWrap}>
+        <View style={styles.segmentedControl}>
+          {ANGEL_MODES.map((m) => {
+            const selected = angelMode === m.id;
+            return (
+              <TouchableOpacity
+                key={m.id}
+                style={[styles.segment, selected && styles.segmentActive]}
+                onPress={() => selectMode(m.id)}
+                activeOpacity={0.6}
+              >
+                <Text style={[styles.segmentLabel, selected && styles.segmentLabelActive]} numberOfLines={1}>
+                  {m.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>
 
       {/* Reconnecting banner */}
       {isReconnecting && isActive && (
@@ -980,35 +973,43 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 1.2,
   },
-  // Mode pills (top bar) — tap to switch mid-session
-  modePillRow: {
-    flexDirection: 'row',
+  // iOS-style segmented control — single pill container with equal-width tabs
+  segmentedControlWrap: {
     paddingHorizontal: spacing.md,
     paddingBottom: spacing.sm,
-    gap: spacing.xs + 2,
   },
-  modePill: {
+  segmentedControl: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: spacing.sm + 2,
-    paddingVertical: spacing.xs + 2,
-    borderRadius: radius.full,
     backgroundColor: colors.surfaceRaised,
-    borderWidth: 1,
-    borderColor: colors.border,
+    borderRadius: 10,
+    padding: 2,
   },
-  modePillActive: {
-    backgroundColor: colors.primaryMuted,
-    borderColor: colors.primary,
+  segment: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 7,
+    paddingHorizontal: 4,
+    borderRadius: 8,
   },
-  modePillLabel: {
+  segmentActive: {
+    backgroundColor: colors.bg,
+    // iOS-like subtle lift via shadow
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  segmentLabel: {
     color: colors.textSecondary,
-    fontSize: fontSize.sm,
-    fontWeight: '600',
+    fontSize: 13,
+    fontWeight: '500',
+    letterSpacing: -0.1,
   },
-  modePillLabelActive: {
-    color: colors.primary,
+  segmentLabelActive: {
+    color: colors.text,
+    fontWeight: '600',
   },
   // Listen button (replaces AngelButton's session toggle)
   listenBtn: {
