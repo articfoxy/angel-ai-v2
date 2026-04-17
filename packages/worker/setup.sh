@@ -146,7 +146,13 @@ function connect() {
   ws.on('close', (code, reason) => { if (pingInterval) { clearInterval(pingInterval); pingInterval = null; } console.log(`[Angel Worker] Disconnected (${code}${reason ? ': ' + reason : ''})`); reconnect(); });
   ws.on('error', (err) => console.error('[Angel Worker] Error:', err.message));
 }
-function reconnect() { if (reconnectAttempts >= 20) process.exit(1); reconnectAttempts++; setTimeout(connect, Math.min(1000 * Math.pow(2, reconnectAttempts), 30000)); }
+function reconnect() {
+  reconnectAttempts++;
+  // First 5 retries: 1s each (fast reconnect during deploy ~30-60s window). Then exp backoff capped at 30s. Never give up.
+  const delay = reconnectAttempts <= 5 ? 1000 : Math.min(1000 * Math.pow(2, reconnectAttempts - 5), 30000);
+  if (reconnectAttempts === 6) console.log('[Angel Worker] Server still down — switching to exponential backoff');
+  setTimeout(connect, delay);
+}
 
 function handleTask(taskId, prompt, context, requestedProject) {
   if (!CLAUDE_BIN) { send({ type: 'error', taskId, error: 'Claude CLI not found' }); return; }
@@ -269,17 +275,94 @@ cd "$(dirname "$0")" && exec node worker.mjs
 STARTEOF
 chmod +x "$INSTALL_DIR/start.sh"
 
+# ── Install as macOS LaunchAgent (auto-start on login + auto-restart on crash) ──
+if [[ "$OSTYPE" == "darwin"* ]]; then
+  PLIST_LABEL="com.angel-ai.worker"
+  PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_LABEL.plist"
+
+  # Resolve node binary path for the plist
+  NODE_BIN=""
+  if command -v node &>/dev/null; then NODE_BIN=$(which node); fi
+  if [ -z "$NODE_BIN" ] && [ -d "$HOME/.nvm/versions/node" ]; then
+    LATEST=$(ls "$HOME/.nvm/versions/node/" | sort -V | tail -1)
+    [ -n "$LATEST" ] && NODE_BIN="$HOME/.nvm/versions/node/$LATEST/bin/node"
+  fi
+
+  if [ -n "$NODE_BIN" ] && [ -x "$NODE_BIN" ]; then
+    # Stop any existing launch agent before overwriting
+    launchctl unload "$PLIST_PATH" 2>/dev/null || true
+
+    mkdir -p "$HOME/Library/LaunchAgents"
+    cat > "$PLIST_PATH" << PLIST_EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>$PLIST_LABEL</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>$NODE_BIN</string>
+    <string>$INSTALL_DIR/worker.mjs</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>$INSTALL_DIR</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$(dirname "$NODE_BIN"):/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>$HOME</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>$INSTALL_DIR/worker.log</string>
+  <key>StandardErrorPath</key>
+  <string>$INSTALL_DIR/worker.log</string>
+</dict>
+</plist>
+PLIST_EOF
+
+    launchctl load "$PLIST_PATH" 2>&1
+    if launchctl list | grep -q "$PLIST_LABEL"; then
+      AGENT_INSTALLED=true
+    fi
+  fi
+fi
+
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "✅ Angel Worker installed to $INSTALL_DIR"
-echo ""
-echo "Start now:   $INSTALL_DIR/start.sh"
-echo "Stop:        Ctrl+C"
-echo ""
+if [ "$AGENT_INSTALLED" = true ]; then
+  echo "✅ LaunchAgent installed — worker will:"
+  echo "   • auto-start on login"
+  echo "   • auto-restart if it crashes"
+  echo "   • survive server deploys (reconnects in ~1s)"
+  echo ""
+  echo "Logs:   tail -f $INSTALL_DIR/worker.log"
+  echo "Stop:   launchctl unload ~/Library/LaunchAgents/com.angel-ai.worker.plist"
+  echo "Start:  launchctl load ~/Library/LaunchAgents/com.angel-ai.worker.plist"
+else
+  echo ""
+  echo "Start manually: $INSTALL_DIR/start.sh"
+fi
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Auto-start (only if running interactively, not piped)
+# If LaunchAgent installed, worker is already running — exit
+if [ "$AGENT_INSTALLED" = true ]; then
+  echo "🚀 Worker is already running via LaunchAgent. Tailing logs for 5s to verify..."
+  sleep 2
+  tail -5 "$INSTALL_DIR/worker.log" 2>/dev/null || echo "(log not yet written)"
+  exit 0
+fi
+
+# Fallback: manual start
 if [ -t 0 ]; then
   read -p "🚀 Start worker now? (y/n) " -n 1 -r
   echo
@@ -287,7 +370,6 @@ if [ -t 0 ]; then
     exec "$INSTALL_DIR/start.sh"
   fi
 else
-  # Piped from curl — start automatically
   echo "🚀 Starting Angel Worker..."
   exec "$INSTALL_DIR/start.sh"
 fi
