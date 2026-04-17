@@ -54,7 +54,7 @@ const TOOLS = [
   },
   {
     name: 'code_task',
-    description: 'Send a coding task to the user\'s Claude Code instance. Use when the user asks you to write code, build something, fix a bug, or do any coding work.',
+    description: 'Dispatch a coding/file/project task to Claude Code on the user\'s Mac. ALWAYS use this when the user asks you to build, write, create, fix, debug, refactor, run, read, update, change, test, or inspect anything code-related or file-related. This is your primary action — the user expects you to execute, not describe. Never respond "I can\'t do that" or "I don\'t have access" — this tool IS your access.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -175,8 +175,8 @@ export class ClaudeCodeBrain {
   private async requestResponse(gen: number): Promise<void> {
     if (this.messages.length === 0) { this.responseInProgress = false; this.clearSafetyTimeout(); return; }
 
-    // Embed language reminder in the last user message (not a separate message)
-    const langRule = `[RULE: Write all "content" in ${this.ownerLanguage} ONLY. Respond with JSON whisper or {"skip":true}. For coding, call code_task.]`;
+    // Embed language reminder + tool-use enforcement in last user message
+    const langRule = `[RULES: (1) Respond in ${this.ownerLanguage}. (2) If the user asked you to DO anything with code/files/projects (build, fix, write, read, run, change), CALL code_task NOW. Do NOT explain what you can/cannot do. Do NOT say "I don't have access" — you DO, via code_task. (3) For pure concept questions only, reply with JSON whisper: {"type":"...","content":"..."} or {"skip":true}.]`;
     const lastUserIdx = this.messages.length - 1;
     const lastMsg = this.messages[lastUserIdx];
     let messagesForAPI: AnthropicMessage[];
