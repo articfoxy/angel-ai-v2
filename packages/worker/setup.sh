@@ -172,13 +172,21 @@ function handleTask(taskId, prompt, context, requestedProject) {
   if (context) fullPrompt += `## Conversation Context:\n${context}\n\n`;
   fullPrompt += `## Task:\n${prompt}\n\nAfter completing the task, update .claude/angel-worker-context.md with a brief summary of what you did.`;
 
-  const claude = spawn(CLAUDE_BIN, ['-p', '--model', 'opus', '--dangerously-skip-permissions'], { cwd, env: { ...process.env } });
+  // Spawn via login shell so Claude CLI inherits full user env (Keychain auth, PATH)
+  // Critical when worker runs as LaunchAgent — minimal env breaks auth
+  const shell = process.env.SHELL || '/bin/zsh';
+  const claudeCmd = `"${CLAUDE_BIN}" -p --model opus --dangerously-skip-permissions`;
+  const claude = spawn(shell, ['-lc', claudeCmd], { cwd, env: { ...process.env, HOME: process.env.HOME || require('os').homedir() } });
   claude.stdin.write(fullPrompt);
   claude.stdin.end();
-  let result = '', chunk = '';
+  let result = '', chunk = '', stderr = '';
   claude.stdout.on('data', (d) => { const t = d.toString(); result += t; chunk += t; if (chunk.length >= 500) { send({ type: 'chunk', taskId, text: chunk }); chunk = ''; } });
-  claude.stderr.on('data', (d) => { const t = d.toString(); if (t.includes('error') || t.includes('Error')) console.error(`[stderr] ${t.trim()}`); });
-  claude.on('close', (code) => { if (chunk) send({ type: 'chunk', taskId, text: chunk }); if (code === 0) { send({ type: 'complete', taskId, result }); console.log(`✅ Done (${result.length} chars)`); } else { send({ type: 'error', taskId, error: result || `Exit ${code}` }); console.log('❌ Failed'); } });
+  claude.stderr.on('data', (d) => { stderr += d.toString(); });
+  claude.on('close', (code) => {
+    if (chunk) send({ type: 'chunk', taskId, text: chunk });
+    if (code === 0) { send({ type: 'complete', taskId, result }); console.log(`✅ Done (${result.length} chars)`); }
+    else { const errMsg = result || stderr || `Exit ${code}`; send({ type: 'error', taskId, error: errMsg }); console.log(`❌ Failed (${code}): ${(stderr || result).slice(0, 300)}`); }
+  });
   claude.on('error', (err) => send({ type: 'error', taskId, error: `Spawn failed: ${err.message}` }));
 }
 
@@ -275,94 +283,67 @@ cd "$(dirname "$0")" && exec node worker.mjs
 STARTEOF
 chmod +x "$INSTALL_DIR/start.sh"
 
-# ── Install as macOS LaunchAgent (auto-start on login + auto-restart on crash) ──
+# ── Install as macOS Login Item (opens Terminal with worker on user login) ──
+# We use Login Item (not LaunchAgent) because Claude CLI auth requires the
+# user's GUI session Keychain. LaunchAgent runs in a context without Keychain
+# access so Claude CLI would fail with "Not logged in". Login Items launch
+# Terminal which inherits the full user session.
 if [[ "$OSTYPE" == "darwin"* ]]; then
-  PLIST_LABEL="com.angel-ai.worker"
-  PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_LABEL.plist"
+  LOGIN_APP="$INSTALL_DIR/AngelWorker.app"
 
-  # Resolve node binary path for the plist
-  NODE_BIN=""
-  if command -v node &>/dev/null; then NODE_BIN=$(which node); fi
-  if [ -z "$NODE_BIN" ] && [ -d "$HOME/.nvm/versions/node" ]; then
-    LATEST=$(ls "$HOME/.nvm/versions/node/" | sort -V | tail -1)
-    [ -n "$LATEST" ] && NODE_BIN="$HOME/.nvm/versions/node/$LATEST/bin/node"
-  fi
+  # Build a minimal .app bundle that runs start.sh in Terminal
+  mkdir -p "$LOGIN_APP/Contents/MacOS"
+  cat > "$LOGIN_APP/Contents/MacOS/AngelWorker" << APP_EOF
+#!/bin/bash
+# Open worker in a visible Terminal window so user can see status
+osascript -e 'tell application "Terminal"
+  activate
+  do script "cd ~/.angel-worker && ./start.sh; echo; echo \"Worker exited. Press Enter to close.\"; read"
+  set miniaturized of front window to true
+end tell' > /dev/null 2>&1
+APP_EOF
+  chmod +x "$LOGIN_APP/Contents/MacOS/AngelWorker"
 
-  if [ -n "$NODE_BIN" ] && [ -x "$NODE_BIN" ]; then
-    # Stop any existing launch agent before overwriting
-    launchctl unload "$PLIST_PATH" 2>/dev/null || true
-
-    mkdir -p "$HOME/Library/LaunchAgents"
-    cat > "$PLIST_PATH" << PLIST_EOF
+  cat > "$LOGIN_APP/Contents/Info.plist" << PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key>
-  <string>$PLIST_LABEL</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>$NODE_BIN</string>
-    <string>$INSTALL_DIR/worker.mjs</string>
-  </array>
-  <key>WorkingDirectory</key>
-  <string>$INSTALL_DIR</string>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>PATH</key>
-    <string>$(dirname "$NODE_BIN"):/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
-    <key>HOME</key>
-    <string>$HOME</string>
-  </dict>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>KeepAlive</key>
-  <true/>
-  <key>ThrottleInterval</key>
-  <integer>10</integer>
-  <key>StandardOutPath</key>
-  <string>$INSTALL_DIR/worker.log</string>
-  <key>StandardErrorPath</key>
-  <string>$INSTALL_DIR/worker.log</string>
+  <key>CFBundleExecutable</key><string>AngelWorker</string>
+  <key>CFBundleIdentifier</key><string>com.angel-ai.worker</string>
+  <key>CFBundleName</key><string>Angel Worker</string>
+  <key>CFBundleVersion</key><string>1.0</string>
+  <key>LSUIElement</key><true/>
 </dict>
 </plist>
 PLIST_EOF
 
-    launchctl load "$PLIST_PATH" 2>&1
-    if launchctl list | grep -q "$PLIST_LABEL"; then
-      AGENT_INSTALLED=true
-    fi
-  fi
+  # Add to Login Items via osascript (requires one-time user approval)
+  osascript -e "tell application \"System Events\" to make login item at end with properties {path:\"$LOGIN_APP\", hidden:false, name:\"Angel Worker\"}" 2>/dev/null && LOGIN_ITEM_INSTALLED=true
 fi
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "✅ Angel Worker installed to $INSTALL_DIR"
-if [ "$AGENT_INSTALLED" = true ]; then
-  echo "✅ LaunchAgent installed — worker will:"
-  echo "   • auto-start on login"
-  echo "   • auto-restart if it crashes"
-  echo "   • survive server deploys (reconnects in ~1s)"
+echo ""
+if [ "$LOGIN_ITEM_INSTALLED" = true ]; then
+  echo "✅ Login Item installed — worker will auto-start on every login"
+  echo "   (opens in a minimized Terminal window)"
   echo ""
-  echo "Logs:   tail -f $INSTALL_DIR/worker.log"
-  echo "Stop:   launchctl unload ~/Library/LaunchAgents/com.angel-ai.worker.plist"
-  echo "Start:  launchctl load ~/Library/LaunchAgents/com.angel-ai.worker.plist"
-else
+  echo "Built-in resilience:"
+  echo "  • Heartbeat pings every 25s → prevents idle timeout"
+  echo "  • Fast reconnect (1s x5) → survives server deploys"
+  echo "  • Exponential backoff after → handles long outages"
   echo ""
-  echo "Start manually: $INSTALL_DIR/start.sh"
+  echo "Uninstall Login Item:"
+  echo "  osascript -e 'tell application \"System Events\" to delete login item \"Angel Worker\"'"
 fi
+echo ""
+echo "Logs:           tail -f $INSTALL_DIR/worker.log"
+echo "Start manually: $INSTALL_DIR/start.sh"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# If LaunchAgent installed, worker is already running — exit
-if [ "$AGENT_INSTALLED" = true ]; then
-  echo "🚀 Worker is already running via LaunchAgent. Tailing logs for 5s to verify..."
-  sleep 2
-  tail -5 "$INSTALL_DIR/worker.log" 2>/dev/null || echo "(log not yet written)"
-  exit 0
-fi
-
-# Fallback: manual start
 if [ -t 0 ]; then
   read -p "🚀 Start worker now? (y/n) " -n 1 -r
   echo
