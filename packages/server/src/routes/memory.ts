@@ -272,13 +272,39 @@ memoryRouter.get('/audit', async (req: AuthRequest, res: Response) => {
 memoryRouter.post('/privacy', async (req: AuthRequest, res: Response) => {
   try {
     const { mode } = req.body as { mode: 'off' | 'standard' | 'private_meeting' };
-    if (!['off', 'standard', 'private_meeting'].includes(mode)) {
-      return res.status(400).json({ error: 'Invalid mode' });
-    }
-    await prisma.user.update({ where: { id: req.userId }, data: { privacyMode: mode } });
+    const { policyService } = await import('../services/memory/policy.service');
+    await policyService.setPrivacyMode(req.userId!, mode);
     res.json({ success: true, mode });
-  } catch {
-    res.status(500).json({ error: 'Failed to update privacy mode' });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message || 'Failed to update privacy mode' });
+  }
+});
+
+// Durable job dispatch (admin actions)
+memoryRouter.post('/jobs/re_embed', async (req: AuthRequest, res: Response) => {
+  try {
+    const { enqueue } = await import('../services/jobs');
+    await enqueue('memory.re_embed_facts', { userId: req.userId }, { priority: 5 });
+    res.json({ success: true, queued: 'memory.re_embed_facts' });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to enqueue job' });
+  }
+});
+
+memoryRouter.post('/jobs/forget', async (req: AuthRequest, res: Response) => {
+  try {
+    const { enqueue } = await import('../services/jobs');
+    await enqueue('memory.forget_workflow', {
+      userId: req.userId,
+      entity: req.body?.entity,
+      dateFrom: req.body?.dateFrom,
+      dateTo: req.body?.dateTo,
+      modality: req.body?.modality,
+      reason: req.body?.reason || 'user',
+    }, { priority: 10 });
+    res.json({ success: true, queued: 'memory.forget_workflow' });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to enqueue forget job' });
   }
 });
 

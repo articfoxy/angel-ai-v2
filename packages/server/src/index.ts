@@ -1,6 +1,11 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+// Telemetry MUST initialize before anything else so auto-instrumentation
+// can patch http/pg/express as they're imported.
+import { initTelemetry } from './telemetry';
+initTelemetry();
+
 import express from 'express';
 import cors from 'cors';
 import http from 'http';
@@ -306,9 +311,26 @@ async function initDatabase() {
 initDatabase().then(() => {
   server.listen(PORT, () => {
     console.log(`Angel AI v2 server running on port ${PORT}`);
-    // Start in-process memory cron (nightly reflection + decay + TTL sweep)
-    import('./services/memory/cron').then(({ startMemoryCron }) => startMemoryCron()).catch((e) =>
-      console.warn('[memory-cron] failed to start:', e?.message),
+    // Start graphile-worker durable job queue (cron + retries + scheduling)
+    import('./services/jobs').then(({ startJobRunner }) => startJobRunner()).catch((e) =>
+      console.warn('[jobs] failed to start:', e?.message),
     );
   });
 });
+
+// Graceful shutdown — flush telemetry + stop workers
+const shutdown = async (signal: string) => {
+  console.log(`[shutdown] received ${signal}`);
+  try {
+    const { stopJobRunner } = await import('./services/jobs');
+    await stopJobRunner();
+  } catch {}
+  try {
+    const { shutdownTelemetry } = await import('./telemetry');
+    await shutdownTelemetry();
+  } catch {}
+  try { await prisma.$disconnect(); } catch {}
+  process.exit(0);
+};
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

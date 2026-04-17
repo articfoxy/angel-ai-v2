@@ -33,6 +33,7 @@ import { CoreBlocksService } from './core-blocks.service';
 import { WorkingStateService } from './working-state.service';
 import type { PrivacyMode } from './policy';
 import { isExplicitRemember } from './policy';
+import { withSpan } from '../../telemetry';
 
 const JUDGE_MODEL = process.env.JUDGE_MODEL || 'gpt-4o-mini';
 
@@ -105,6 +106,31 @@ export class MemoryJudgeService {
    * Returns a summary of what changed.
    */
   async run(params: {
+    userId: string;
+    sessionId?: string | null;
+    trigger: JudgeTriggerReason;
+    privacyMode?: PrivacyMode;
+  }): Promise<{
+    observationsProcessed: number;
+    episodeCreated: string | null;
+    factsAdded: number;
+    factsUpdated: number;
+    factsSuperseded: number;
+    proceduresProposed: number;
+  }> {
+    return withSpan('memory.judge.run', async (span) => {
+      span?.setAttribute('memory.trigger', params.trigger.kind);
+      span?.setAttribute('memory.user_id', params.userId);
+      const result = await this._run(params);
+      span?.setAttribute('memory.obs_processed', result.observationsProcessed);
+      span?.setAttribute('memory.facts_added', result.factsAdded);
+      span?.setAttribute('memory.facts_updated', result.factsUpdated);
+      span?.setAttribute('memory.facts_superseded', result.factsSuperseded);
+      return result;
+    }, { 'memory.layer': 'judge' });
+  }
+
+  private async _run(params: {
     userId: string;
     sessionId?: string | null;
     trigger: JudgeTriggerReason;

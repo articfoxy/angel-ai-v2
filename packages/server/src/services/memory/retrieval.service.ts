@@ -27,6 +27,7 @@ import { EpisodeService } from './episode.service';
 import { ProcedureService } from './procedure.service';
 import { logRetrieval } from './audit';
 import { canRecall, type PrivacyMode } from './policy';
+import { withSpan } from '../../telemetry';
 
 const WEIGHTS = {
   semantic: 0.5,
@@ -78,6 +79,25 @@ export class RetrievalService {
   }
 
   async buildContext(
+    userId: string,
+    query: string,
+    sessionId: string | null,
+    opts: RetrievalOptions = {},
+  ): Promise<RetrievalResult> {
+    return withSpan('memory.retrieval.buildContext', async (span) => {
+      span?.setAttribute('memory.user_id', userId);
+      span?.setAttribute('memory.session_id', sessionId ?? '');
+      span?.setAttribute('memory.query_len', query.length);
+      const result = await this._buildContext(userId, query, sessionId, opts);
+      span?.setAttribute('memory.facts_count', result.usedIds.facts.length);
+      span?.setAttribute('memory.episodes_count', result.usedIds.episodes.length);
+      span?.setAttribute('memory.reflections_count', result.usedIds.reflections.length);
+      span?.setAttribute('memory.token_estimate', result.tokenEstimate);
+      return result;
+    }, { 'memory.layer': 'retrieval' });
+  }
+
+  private async _buildContext(
     userId: string,
     query: string,
     sessionId: string | null,

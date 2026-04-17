@@ -9,12 +9,14 @@
 import { randomUUID } from 'crypto';
 import { prisma } from '../../index';
 import { EmbeddingService } from './embeddings';
+import { RawAssetService } from '../storage/raw-asset.service';
 import {
   classifyContent,
   canPersistObservation,
   type PrivacyMode,
   type PrivacyClass,
 } from './policy';
+import { withSpan } from '../../telemetry';
 
 export interface ObservationInput {
   userId: string;
@@ -31,23 +33,60 @@ export interface ObservationInput {
   extractorVersions?: Record<string, string>;
   privacyClass?: PrivacyClass;
   contentRef?: string | null;
+  /** Optional raw media to archive (audio clip, image frame). Uploaded async
+   *  via RawAssetService if enabled. Resulting URI is backfilled into contentRef. */
+  rawMedia?: {
+    body: Buffer;
+    type: 'audio' | 'image' | 'video' | 'document';
+    contentType?: string;
+  };
 }
 
 export class ObservationService {
   private embeddings: EmbeddingService;
+  private rawAssets: RawAssetService;
 
   constructor(apiKey?: string) {
     this.embeddings = new EmbeddingService(apiKey);
+    this.rawAssets = new RawAssetService();
   }
 
   /** Write a single observation. Returns the id, or null if policy blocks persistence. */
   async write(input: ObservationInput, privacyMode: PrivacyMode = 'standard'): Promise<string | null> {
-    const privacyClass = input.privacyClass ?? classifyContent(input.content);
-    if (!canPersistObservation(privacyMode, privacyClass)) return null;
+    return withSpan('memory.observation.write', async (span) => {
+      const privacyClass = input.privacyClass ?? classifyContent(input.content);
+      span?.setAttribute('memory.modality', input.modality);
+      span?.setAttribute('memory.privacy_class', privacyClass);
+      if (!canPersistObservation(privacyMode, privacyClass)) {
+        span?.setAttribute('memory.policy_denied', true);
+        return null;
+      }
 
-    const id = randomUUID();
-    const vec = await this.embeddings.embed(input.content);
-    const vectorStr = vec ? this.embeddings.toSqlVector(vec) : null;
+      // Upload raw media FIRST so we have a URI to reference before the row is created
+      let contentRef = input.contentRef ?? null;
+      if (input.rawMedia && this.rawAssets.isEnabled && input.importance !== undefined && input.importance >= 7) {
+        const uri = await this.rawAssets.upload({
+          userId: input.userId,
+          modality: input.rawMedia.type,
+          observedAt: input.observedAt ?? new Date(),
+          body: input.rawMedia.body,
+          contentType: input.rawMedia.contentType,
+          privacyClass,
+          memoryType: 'observation',
+        });
+        if (uri) contentRef = uri;
+      }
+
+      const id = randomUUID();
+      const vec = await this.embeddings.embed(input.content);
+      const vectorStr = vec ? this.embeddings.toSqlVector(vec) : null;
+      span?.setAttribute('memory.has_embedding', !!vectorStr);
+      span?.setAttribute('memory.has_raw_asset', !!contentRef);
+      return this._persist(id, input, privacyClass, vectorStr, contentRef);
+    });
+  }
+
+  private async _persist(id: string, input: ObservationInput, privacyClass: PrivacyClass, vectorStr: string | null, contentRef: string | null): Promise<string | null> {
 
     try {
       if (vectorStr) {
@@ -69,7 +108,7 @@ export class ObservationService {
           JSON.stringify(input.payload ?? null),
           Math.max(0, Math.min(10, Math.round(input.importance ?? 5))),
           privacyClass,
-          input.contentRef ?? null,
+          contentRef,
           JSON.stringify(input.extractorVersions ?? null),
           input.entities ?? [],
           JSON.stringify(input.locality ?? null),
@@ -89,7 +128,7 @@ export class ObservationService {
             payload: input.payload ?? undefined,
             importance: Math.max(0, Math.min(10, Math.round(input.importance ?? 5))),
             privacyClass,
-            contentRef: input.contentRef ?? null,
+            contentRef,
             extractorVersions: input.extractorVersions ?? undefined,
             entities: input.entities ?? [],
             locality: input.locality ?? undefined,
