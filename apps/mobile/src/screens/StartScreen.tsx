@@ -24,7 +24,6 @@ import Animated, {
   Easing,
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { AngelButton } from '../components/AngelButton';
 import { TranscriptView } from '../components/TranscriptView';
 import { useAuth } from '../hooks/useAuth';
 import { connectSocket, disconnectSocket, getSocket, onSocketStateChange } from '../services/socket';
@@ -715,6 +714,15 @@ export function StartScreen() {
       await stopRecording().catch(() => {});
       setIsListening(false);
     } else {
+      // If auto-start is still running, wait for it to finish before recording
+      // (otherwise startSession early-returns due to isStartingRef guard and
+      // the user's tap gets lost silently)
+      if (isStartingRef.current) {
+        const deadline = Date.now() + 5000;
+        while (isStartingRef.current && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+      }
       // Ensure session exists first
       if (!isActive) {
         await startSession({ startRecordingAfter: true });
@@ -723,8 +731,6 @@ export function StartScreen() {
       }
     }
   };
-
-  const modeLabel = ANGEL_MODES.find((m) => m.id === angelMode)?.label || 'Intelligence';
 
   return (
     <KeyboardAvoidingView
@@ -1043,35 +1049,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: -0.5,
   },
-  activeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginTop: spacing.xs + 2,
-  },
-  activeDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
-    backgroundColor: colors.success,
-  },
-  activeText: {
-    color: colors.success,
-    fontSize: fontSize.xs,
-    fontWeight: '700',
-    letterSpacing: 1.2,
-  },
-  modeBadge: {
-    backgroundColor: colors.primaryMuted,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-    borderRadius: radius.full,
-  },
-  modeBadgeText: {
-    color: colors.primary,
-    fontSize: fontSize.xs,
-    fontWeight: '700',
-  },
   timer: {
     color: colors.textSecondary,
     fontSize: fontSize.sm,
@@ -1262,61 +1239,6 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'] as any,
     width: 32,
     textAlign: 'right',
-  },
-  idleContent: {
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.md,
-    paddingBottom: spacing.sm,
-  },
-  modeGrid: {
-    gap: spacing.sm,
-  },
-  modeCard: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  modeCardActive: {
-    borderColor: colors.primary,
-    backgroundColor: colors.primaryMuted,
-  },
-  modeCardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginBottom: spacing.xs,
-  },
-  modeCardLabel: {
-    color: colors.text,
-    fontSize: fontSize.md,
-    fontWeight: '700',
-    flex: 1,
-  },
-  modeCardLabelActive: {
-    color: colors.primary,
-  },
-  modeCardDesc: {
-    color: colors.textTertiary,
-    fontSize: fontSize.sm,
-    lineHeight: 18,
-  },
-  testButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.xs,
-    marginTop: spacing.md,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-    borderRadius: radius.full,
-    alignSelf: 'center',
-  },
-  testButtonText: {
-    color: colors.primary,
-    fontSize: fontSize.sm,
-    fontWeight: '600',
   },
   presetGrid: {
     flexDirection: 'row',

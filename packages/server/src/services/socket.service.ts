@@ -404,8 +404,11 @@ export function setupSocketHandlers(io: Server) {
       };
       socket.emit('whisper', card);
 
-      // Speak the whisper via TTS (voice output through AirPods)
-      if (tts && tts.isConnected && whisper.content && whisper.content.length >= 3) {
+      // Speak the whisper via TTS (voice output through AirPods).
+      // Skip code_task dispatch announcements — user will hear the synthesized
+      // summary when the task completes (avoids double-speaking).
+      const skipTTS = whisper.action === 'code_task' || whisper.type === 'code_output' || whisper.type === 'code_summary';
+      if (!skipTTS && tts && tts.isConnected && whisper.content && whisper.content.length >= 3) {
         tts.speak(card.id, whisper.content);
       }
 
@@ -1222,17 +1225,52 @@ export function setupSocketHandlers(io: Server) {
     socket.on('disconnect', async () => {
       unsubscribeProjects();
       const sid = currentSessionId;
+      const uid = socket.userId;
+      const speakers = deepgram ? deepgram.getSpeakers() : {};
+      if (deepgram) await deepgram.flush().catch(() => {});
+      const keyForExtraction = sessionOpenaiKey;
+
       await cleanupSession();
-      // Mark any orphaned session as ended in the DB
-      if (sid && socket.userId) {
+
+      // Continuous-session UX: disconnect IS the session end. Run extraction
+      // + reflection so memories/debriefs are still produced. Fire-and-forget;
+      // the socket is already closed so we can't emit debrief — that's OK,
+      // the next session start will retrieve the updated memories.
+      if (sid && uid) {
         try {
-          await prisma.session.updateMany({
-            where: { id: sid, userId: socket.userId, status: { not: 'ended' } },
-            data: { status: 'ended', endedAt: new Date() },
+          // Mark processing so UI won't show it as active
+          await prisma.session.update({
+            where: { id: sid },
+            data: { endedAt: new Date(), status: 'processing', speakers },
           });
-        } catch {}
+        } catch {
+          // Session may not exist or already ended — fall through
+        }
+
+        // Run extraction in the background (don't block disconnect handler)
+        (async () => {
+          try {
+            const extraction = new ExtractionService(keyForExtraction);
+            const result = await extraction.processSession(sid, uid);
+            const summary = result?.summary || 'Session completed';
+            await prisma.session.update({
+              where: { id: sid },
+              data: { status: 'ended', summary },
+            }).catch(() => {});
+            console.log(`[disconnect] Extraction done for ${sid}: ${result?.memoriesExtracted ?? 0} memories`);
+            // Post-session reflection (entity merging, core memory update)
+            runPostSessionReflection(uid).catch((e) => console.error('[disconnect] reflection:', e));
+          } catch (err) {
+            console.error('[disconnect] extraction failed:', (err as any)?.message);
+            await prisma.session.update({
+              where: { id: sid },
+              data: { status: 'ended', summary: 'Session ended (extraction failed)' },
+            }).catch(() => {});
+          }
+        })();
       }
-      console.log(`Client disconnected: ${socket.userId}`);
+
+      console.log(`Client disconnected: ${uid}`);
     });
   });
 }
