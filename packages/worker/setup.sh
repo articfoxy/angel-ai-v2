@@ -125,19 +125,25 @@ console.log(`[Angel Worker] Claude: ${CLAUDE_BIN || 'NOT FOUND'}`);
 console.log(`[Angel Worker] Projects: ${(projects || []).map(p => p.name).join(', ') || 'none'}`);
 console.log(`[Angel Worker] Default: ${DEFAULT_CWD}`);
 
-let ws = null, reconnectAttempts = 0;
+let ws = null, reconnectAttempts = 0, pingInterval = null;
 function connect() {
   console.log(`[Angel Worker] Connecting to ${serverUrl} as "${machineName}"...`);
   ws = new WebSocket(WS_URL);
-  ws.on('open', () => { reconnectAttempts = 0; console.log('[Angel Worker] ✅ Connected!'); });
+  ws.on('open', () => {
+    reconnectAttempts = 0; console.log('[Angel Worker] ✅ Connected!');
+    if (pingInterval) clearInterval(pingInterval);
+    pingInterval = setInterval(() => { if (ws?.readyState === WebSocket.OPEN) { try { ws.ping(); } catch {} send({ type: 'ping' }); } }, 25000);
+  });
   ws.on('message', (data) => {
     try {
       const msg = JSON.parse(data.toString());
       if (msg.type === 'registered') { console.log(`[Angel Worker] Registered as ${msg.workerId}`); send({ type: 'projects', projects: (projects || []).map(p => p.name) }); }
       else if (msg.type === 'task') handleTask(msg.taskId, msg.prompt, msg.context, msg.project);
+      else if (msg.type === 'pong') {}
     } catch {}
   });
-  ws.on('close', () => { console.log('[Angel Worker] Disconnected'); reconnect(); });
+  ws.on('pong', () => {});
+  ws.on('close', (code, reason) => { if (pingInterval) { clearInterval(pingInterval); pingInterval = null; } console.log(`[Angel Worker] Disconnected (${code}${reason ? ': ' + reason : ''})`); reconnect(); });
   ws.on('error', (err) => console.error('[Angel Worker] Error:', err.message));
 }
 function reconnect() { if (reconnectAttempts >= 20) process.exit(1); reconnectAttempts++; setTimeout(connect, Math.min(1000 * Math.pow(2, reconnectAttempts), 30000)); }

@@ -177,12 +177,25 @@ server.on('upgrade', (req, socket, head) => {
             case 'error':
               codeWorkerHub.handleError(workerId, msg.taskId, msg.error || 'Unknown error');
               break;
+            case 'ping':
+              try { ws.send(JSON.stringify({ type: 'pong' })); } catch {}
+              break;
           }
         } catch {}
       });
+      ws.on('ping', () => { try { ws.pong(); } catch {} });
+
+      // Server-side heartbeat: detect dead connections (terminate if no pong in 60s)
+      let isAlive = true;
+      ws.on('pong', () => { isAlive = true; });
+      const heartbeat = setInterval(() => {
+        if (!isAlive) { try { ws.terminate(); } catch {} return; }
+        isAlive = false;
+        try { ws.ping(); } catch {}
+      }, 30000);
 
       let removed = false;
-      const cleanupWorker = () => { if (!removed) { removed = true; codeWorkerHub.removeWorker(workerId); } };
+      const cleanupWorker = () => { if (!removed) { removed = true; clearInterval(heartbeat); codeWorkerHub.removeWorker(workerId); } };
       ws.on('close', cleanupWorker);
       ws.on('error', cleanupWorker);
 
