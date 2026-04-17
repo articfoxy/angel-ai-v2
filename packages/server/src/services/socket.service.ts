@@ -72,14 +72,31 @@ export function setupSocketHandlers(io: Server) {
     let transcriptsSinceMemoryRefresh = 0;
     const MEMORY_REFRESH_INTERVAL = 10;
 
-    /** Atomically rebuild the Realtime AI prompt from base + memory + directives */
-    function rebuildInstructions(newMemoryContext?: string) {
+    /** Atomically rebuild the Realtime AI prompt from base + memory + directives.
+     *  If rebuildBase=true (e.g. worker projects changed), regenerates the base
+     *  from scratch with the latest worker project list. */
+    function rebuildInstructions(newMemoryContext?: string, rebuildBase = false) {
       if (!realtime) return;
       if (newMemoryContext !== undefined) lastMemoryContext = newMemoryContext;
-      // Get base instructions (everything before dynamic sections)
-      const base = realtime.instructions
-        .split('\n\n## WHAT YOU REMEMBER')[0]
-        .split('\n\n## LIVE DIRECTIVES')[0];
+      let base: string;
+      if (rebuildBase && socket.userId) {
+        const workerProjects = sessionMode === 'code' ? codeWorkerHub.getProjects(socket.userId) : [];
+        base = buildAngelInstructions(
+          sessionOwnerLanguage,
+          sessionMode,
+          sessionTranslateLanguages,
+          sessionIntPresets,
+          sessionCdPresets,
+          sessionCustomInstr,
+          '', // memory appended separately below
+          workerProjects,
+        );
+      } else {
+        // Get base instructions (everything before dynamic sections)
+        base = realtime.instructions
+          .split('\n\n## WHAT YOU REMEMBER')[0]
+          .split('\n\n## LIVE DIRECTIVES')[0];
+      }
       const mem = lastMemoryContext.trim()
         ? `\n\n## WHAT YOU REMEMBER ABOUT THE USER\n${lastMemoryContext.trim()}`
         : '';
@@ -89,6 +106,15 @@ export function setupSocketHandlers(io: Server) {
         : '';
       realtime.updateInstructions(base + mem + dir);
     }
+
+    // Subscribe to worker project-list changes — refresh brain's prompt when
+    // a worker connects mid-session or updates its project list
+    const unsubscribeProjects = codeWorkerHub.onProjectsChanged((uid) => {
+      if (uid === socket.userId && sessionMode === 'code' && realtime) {
+        console.log('[session] Worker projects changed — refreshing code-mode prompt');
+        rebuildInstructions(undefined, true);
+      }
+    });
 
     /**
      * Switch Angel's mode mid-session while preserving short-term memory.
@@ -118,6 +144,7 @@ export function setupSocketHandlers(io: Server) {
       const statusHandler = (status: string) => { console.log(`[Brain] Status: ${status}`); socket.emit('realtime:status', { status }); };
 
       // Rebuild instructions for the new mode
+      const workerProjects = newMode === 'code' ? codeWorkerHub.getProjects(socket.userId) : [];
       const newInstructions = buildAngelInstructions(
         sessionOwnerLanguage,
         newMode,
@@ -126,6 +153,7 @@ export function setupSocketHandlers(io: Server) {
         sessionCdPresets,
         sessionCustomInstr,
         sessionMemoryContext,
+        workerProjects,
       );
 
       if (newMode === 'code' && sessionAnthropicKey) {
@@ -509,7 +537,8 @@ export function setupSocketHandlers(io: Server) {
         }
         sessionMemoryContext = memoryContext;
 
-        const angelInstructions = buildAngelInstructions(ownerLanguage, sessionMode, translateLanguages, intPresets, cdPresets, customInstr, memoryContext);
+        const workerProjects = sessionMode === 'code' ? codeWorkerHub.getProjects(userId) : [];
+        const angelInstructions = buildAngelInstructions(ownerLanguage, sessionMode, translateLanguages, intPresets, cdPresets, customInstr, memoryContext, workerProjects);
         const whisperHandler = (whisper: any) => {
           handleRealtimeWhisper(userId, whisper).catch((err) => {
             console.error('[Brain] Whisper handling error:', err);
@@ -1189,6 +1218,7 @@ export function setupSocketHandlers(io: Server) {
     });
 
     socket.on('disconnect', async () => {
+      unsubscribeProjects();
       const sid = currentSessionId;
       await cleanupSession();
       // Mark any orphaned session as ended in the DB

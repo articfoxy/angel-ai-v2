@@ -69,6 +69,9 @@ class CodeWorkerHub {
       }
       this.workers.delete(workerId);
       console.log(`[CodeWorker] Worker removed: ${worker.name} (${workerId})`);
+      for (const cb of this.projectChangeListeners) {
+        try { cb(worker.userId); } catch {}
+      }
     }
   }
 
@@ -78,7 +81,22 @@ class CodeWorkerHub {
     if (worker) {
       worker.projects = projects;
       console.log(`[CodeWorker] ${worker.name} projects: ${projects.join(', ')}`);
+      // Notify any listeners that this user's project list may have changed
+      for (const cb of this.projectChangeListeners) {
+        try { cb(worker.userId); } catch {}
+      }
     }
+  }
+
+  private projectChangeListeners: Array<(userId: string) => void> = [];
+
+  /** Subscribe to project-list changes for any user. Returns unsubscribe. */
+  onProjectsChanged(cb: (userId: string) => void): () => void {
+    this.projectChangeListeners.push(cb);
+    return () => {
+      const i = this.projectChangeListeners.indexOf(cb);
+      if (i >= 0) this.projectChangeListeners.splice(i, 1);
+    };
   }
 
   /** Get all available projects across all workers for a user. */
