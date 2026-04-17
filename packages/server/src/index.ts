@@ -226,6 +226,55 @@ async function initDatabase() {
     console.warn('[db] pgvector extension setup skipped:', err?.message?.slice(0, 100));
   }
 
+  // One-shot Memory OS v2 migration — idempotent via schema comment marker.
+  // Drops old v1 memory tables so the Prisma-managed schema can recreate fresh.
+  // (start.sh also runs prisma db push, but we do the destructive drop here
+  //  from inside the server process to guarantee it runs regardless of start.sh.)
+  try {
+    const marker = await prisma.$queryRawUnsafe<any[]>(
+      `SELECT 1 FROM pg_description
+       WHERE description = 'angel-memory-os-v2'
+         AND objoid = (SELECT oid FROM pg_namespace WHERE nspname = 'public')`,
+    );
+    if (!marker || marker.length === 0) {
+      console.log('[db] Applying Angel Memory OS v2 destructive migration...');
+      await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "Memory" CASCADE`);
+      await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "CoreMemory" CASCADE`);
+      await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "Relationship" CASCADE`);
+      // Don't drop Reflection/Entity/Episode — Prisma db push in start.sh
+      // restructures them via ALTER. But older Episode/Entity/Reflection had
+      // column types incompatible with v2 schema — safer to wipe and let
+      // db push recreate them.
+      await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "Reflection" CASCADE`);
+      await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "Entity" CASCADE`);
+      await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "Episode" CASCADE`);
+      await prisma.$executeRawUnsafe(`COMMENT ON SCHEMA public IS 'angel-memory-os-v2'`);
+      console.log('[db] ✓ v2 destructive migration applied — old tables dropped');
+    }
+  } catch (err: any) {
+    console.warn('[db] v2 migration skipped/failed:', err?.message?.slice(0, 200));
+  }
+
+  // Run `prisma db push` from within Node so the v2 schema gets materialized
+  // even if start.sh didn't execute its commands. Safe: --accept-data-loss is
+  // needed because we just dropped old tables above, and it's idempotent on
+  // subsequent boots.
+  try {
+    const { spawnSync } = await import('child_process');
+    const res = spawnSync('npx', ['prisma', 'db', 'push', '--skip-generate', '--accept-data-loss'], {
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: process.env,
+    });
+    if (res.status === 0) {
+      console.log('[db] ✓ prisma db push applied v2 schema');
+    } else {
+      console.warn('[db] prisma db push non-zero exit:', res.status, (res.stdout || '').slice(0, 300), (res.stderr || '').slice(0, 300));
+    }
+  } catch (err: any) {
+    console.warn('[db] prisma db push failed to spawn:', err?.message?.slice(0, 200));
+  }
+
   // HNSW vector indices on v2 memory tables — each wrapped individually so
   // one failure doesn't skip the others.
   const vectorTables = ['Fact', 'Episode', 'Reflection', 'Observation', 'Entity'];
