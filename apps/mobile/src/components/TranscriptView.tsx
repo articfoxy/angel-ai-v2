@@ -27,6 +27,11 @@ const WHISPER_TYPE_CONFIG: Record<
   action: { icon: 'arrow-forward-circle-outline', color: '#34d399', bg: 'rgba(52, 211, 153, 0.12)', label: 'Action' },
   warning: { icon: 'warning-outline', color: '#fbbf24', bg: 'rgba(251, 191, 36, 0.12)', label: 'Heads Up' },
   memory: { icon: 'bookmark-outline', color: '#38bdf8', bg: 'rgba(56, 189, 248, 0.12)', label: 'Remembered' },
+  // Claude Code output — full raw text, monospace-ish, read-only
+  code_output: { icon: 'terminal-outline', color: '#94a3b8', bg: 'rgba(148, 163, 184, 0.08)', label: 'Claude Code' },
+  // Synthesized summary — what gets spoken via TTS
+  code_summary: { icon: 'mic-outline', color: '#34d399', bg: 'rgba(52, 211, 153, 0.12)', label: 'Angel says' },
+  code: { icon: 'code-slash-outline', color: '#7c7fff', bg: 'rgba(124, 127, 255, 0.12)', label: 'Code' },
   default: { icon: 'sparkles-outline', color: '#7c7fff', bg: 'rgba(124, 127, 255, 0.12)', label: 'Angel' },
 };
 

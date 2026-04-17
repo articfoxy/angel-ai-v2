@@ -11,6 +11,7 @@ import { RetrievalService } from './memory/retrieval.service';
 import { PerplexityService } from './perplexity.service';
 import { ClaudeCodeBrain } from './claude-brain.service';
 import { codeWorkerHub } from './codeworker.service';
+import { synthesizeCodeSummary } from './summarizer.service';
 import { CartesiaTTSService } from './tts.service';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
@@ -58,6 +59,8 @@ export function setupSocketHandlers(io: Server) {
     let testTimer: ReturnType<typeof setTimeout> | null = null;
     let liveDirectives: string[] = [];
     let sessionOpenaiKey = '';
+    let sessionAnthropicKey = '';
+    let sessionOwnerLanguage = 'English';
     let lastMemoryContext = ''; // Cached for atomic prompt rebuilds
     let transcriptsSinceMemoryRefresh = 0;
     const MEMORY_REFRESH_INTERVAL = 10;
@@ -191,32 +194,52 @@ export function setupSocketHandlers(io: Server) {
 
           const task = codeWorkerHub.dispatchTask(userId, taskPrompt, taskContext, undefined, taskProject, {
             onChunk: (text) => {
+              // Live progress goes to the status banner — no whisper cards
+              // (prevents transcript clutter; user sees final output at completion)
               socket.emit('code_task:status', { status: 'working', detail: text.slice(-200) });
-              socket.emit('whisper', {
-                id: uuid(),
-                type: 'code',
-                content: `⏳ ${text.slice(-200)}`,
-                createdAt: new Date().toISOString(),
-              });
             },
-            onComplete: (result) => {
+            onComplete: async (result) => {
               socket.emit('code_task:status', { status: 'done', result: result.slice(0, 400) });
+
+              // (1) RAW OUTPUT card — full Claude Code output, display only, no TTS
               socket.emit('whisper', {
                 id: uuid(),
-                type: 'code',
-                content: '✅ Task completed',
-                detail: result.slice(0, 2000),
+                type: 'code_output',
+                content: '📄 Claude Code output',
+                detail: result.slice(0, 4000),
                 createdAt: new Date().toISOString(),
               });
+
+              // (2) SYNTHESIZED SUMMARY — 1-2 sentences, spoken via TTS
+              try {
+                const summary = await synthesizeCodeSummary(sessionAnthropicKey, sessionOwnerLanguage, result, taskPrompt);
+                if (summary) {
+                  const summaryCard = {
+                    id: uuid(),
+                    type: 'code_summary',
+                    content: summary,
+                    createdAt: new Date().toISOString(),
+                  };
+                  socket.emit('whisper', summaryCard);
+                  if (tts && tts.isConnected) tts.speak(summaryCard.id, summary);
+                }
+              } catch (err) {
+                console.error('[code_task] summarization failed:', (err as any)?.message);
+              }
             },
             onError: (error) => {
               socket.emit('code_task:status', { status: 'failed', error: error.slice(0, 200) });
-              socket.emit('whisper', {
+              const errorMsg = `Task failed: ${error.slice(0, 100)}`;
+              const errorCard = {
                 id: uuid(),
                 type: 'warning',
-                content: `❌ Task failed: ${error.slice(0, 100)}`,
+                content: `❌ ${errorMsg}`,
+                detail: error.slice(0, 2000),
                 createdAt: new Date().toISOString(),
-              });
+              };
+              socket.emit('whisper', errorCard);
+              // Speak the failure so user knows without looking at screen
+              if (tts && tts.isConnected) tts.speak(errorCard.id, errorMsg);
             },
           });
           if (task) {
@@ -350,6 +373,7 @@ export function setupSocketHandlers(io: Server) {
       const ownerLanguage = ALLOWED_OWNER_LANGUAGES.includes(payload.ownerLanguage as string)
         ? (payload.ownerLanguage as string)
         : 'English';
+      sessionOwnerLanguage = ownerLanguage;
       const sessionMode = payload.mode || 'intelligence';
 
       if (openaiKey) {
@@ -384,6 +408,7 @@ export function setupSocketHandlers(io: Server) {
         const anthropicKey = payload.byok?.provider === 'anthropic' && payload.byok?.apiKey
           ? payload.byok.apiKey
           : process.env.ANTHROPIC_API_KEY || '';
+        sessionAnthropicKey = anthropicKey; // Capture for post-task summarization
 
         if (sessionMode === 'code' && anthropicKey) {
           console.log(`[session] Using Claude Opus brain for Code mode`);
