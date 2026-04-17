@@ -45,6 +45,7 @@ const SESSION_EVENTS = [
   'deepgram:status',
   'angel:thinking',
   'code_task:status',
+  'mode:switched',
   'tts:start',
   'tts:chunk',
   'tts:done',
@@ -251,6 +252,11 @@ export function StartScreen() {
 
     sock.on('angel:thinking', (data: { active: boolean }) => {
       setAngelThinking(data.active);
+    });
+
+    sock.on('mode:switched', (data: { mode: AngelMode; from: AngelMode }) => {
+      setAngelMode(data.mode);
+      SecureStore.setItemAsync('angel_v2_mode', data.mode).catch(() => {});
     });
 
     sock.on('code_task:status', (data: { status: 'dispatching' | 'working' | 'done' | 'failed'; task?: string; detail?: string; result?: string; error?: string }) => {

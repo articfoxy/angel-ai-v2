@@ -61,6 +61,13 @@ export function setupSocketHandlers(io: Server) {
     let sessionOpenaiKey = '';
     let sessionAnthropicKey = '';
     let sessionOwnerLanguage = 'English';
+    // Session config captured at start — needed to rebuild brain on mode switch
+    let sessionMode: 'translation' | 'intelligence' | 'hybrid' | 'code' = 'intelligence';
+    let sessionTranslateLanguages: string[] = [];
+    let sessionIntPresets: string[] = [];
+    let sessionCdPresets: string[] = [];
+    let sessionCustomInstr = '';
+    let sessionMemoryContext = '';
     let lastMemoryContext = ''; // Cached for atomic prompt rebuilds
     let transcriptsSinceMemoryRefresh = 0;
     const MEMORY_REFRESH_INTERVAL = 10;
@@ -81,6 +88,96 @@ export function setupSocketHandlers(io: Server) {
           liveDirectives.map((d, i) => `${i + 1}. ${d}`).join('\n')
         : '';
       realtime.updateInstructions(base + mem + dir);
+    }
+
+    /**
+     * Switch Angel's mode mid-session while preserving short-term memory.
+     * - Closes the old brain cleanly
+     * - Creates a new brain of the correct type for the new mode
+     * - Replays recent transcript into the new brain so it has context
+     * - Notifies the client so UI updates
+     */
+    async function switchMode(newMode: 'translation' | 'intelligence' | 'hybrid' | 'code'): Promise<boolean> {
+      if (newMode === sessionMode) return false; // No-op
+      if (!socket.userId) return false;
+      const oldMode = sessionMode;
+      console.log(`[mode-switch] ${oldMode} → ${newMode}`);
+
+      const openaiKey = sessionOpenaiKey;
+      if (!openaiKey) { console.warn('[mode-switch] No OpenAI key'); return false; }
+
+      // Tear down the current brain
+      if (realtime) {
+        try { await realtime.close(); } catch {}
+        realtime = null;
+      }
+
+      sessionMode = newMode;
+      const whisperHandler = (whisper: any) => { handleRealtimeWhisper(socket.userId!, whisper).catch((e) => console.error('[Brain] whisper err:', e)); };
+      const errorHandler = (error: string) => console.error('[Brain] Error:', error);
+      const statusHandler = (status: string) => { console.log(`[Brain] Status: ${status}`); socket.emit('realtime:status', { status }); };
+
+      // Rebuild instructions for the new mode
+      const newInstructions = buildAngelInstructions(
+        sessionOwnerLanguage,
+        newMode,
+        sessionTranslateLanguages,
+        sessionIntPresets,
+        sessionCdPresets,
+        sessionCustomInstr,
+        sessionMemoryContext,
+      );
+
+      if (newMode === 'code' && sessionAnthropicKey) {
+        realtime = new ClaudeCodeBrain({
+          apiKey: sessionAnthropicKey,
+          ownerLanguage: sessionOwnerLanguage,
+          mode: newMode,
+          instructions: newInstructions,
+          onWhisper: whisperHandler,
+          onError: errorHandler,
+          onStatus: statusHandler as any,
+        });
+      } else {
+        realtime = new RealtimeService({
+          apiKey: openaiKey,
+          ownerLanguage: sessionOwnerLanguage,
+          mode: newMode,
+          instructions: newInstructions,
+          onWhisper: whisperHandler,
+          onError: errorHandler,
+          onStatus: statusHandler as any,
+        });
+      }
+
+      try {
+        await realtime.connect();
+      } catch (err) {
+        console.error('[mode-switch] connect failed:', err);
+        realtime = null;
+        return false;
+      }
+
+      // Replay last N transcripts so the new brain has short-term context
+      const SHORT_TERM_LINES = 20;
+      const recent = transcriptBuffer.slice(-SHORT_TERM_LINES);
+      for (const line of recent) {
+        try { realtime.feedTranscript(line); } catch {}
+      }
+      console.log(`[mode-switch] Replayed ${recent.length} lines into new brain`);
+
+      // Rebuild live directives + memory into the new brain's instructions
+      rebuildInstructions();
+
+      // Tell the client
+      socket.emit('mode:switched', { mode: newMode, from: oldMode });
+      socket.emit('whisper', {
+        id: uuid(),
+        type: 'mode_switch',
+        content: `🎛️ Switched to ${newMode.charAt(0).toUpperCase() + newMode.slice(1)} mode`,
+        createdAt: new Date().toISOString(),
+      });
+      return true;
     }
 
     function clearAllTimers() {
@@ -374,13 +471,18 @@ export function setupSocketHandlers(io: Server) {
         ? (payload.ownerLanguage as string)
         : 'English';
       sessionOwnerLanguage = ownerLanguage;
-      const sessionMode = payload.mode || 'intelligence';
+      sessionMode = payload.mode || 'intelligence';
 
       if (openaiKey) {
         const translateLanguages = payload.translateLanguages || [];
         const intPresets = payload.intelligencePresets || ['jargon'];
         const cdPresets = payload.codePresets || ['debug', 'explain'];
         const customInstr = payload.customInstructions || '';
+        // Capture for mode-switch rebuilds
+        sessionTranslateLanguages = translateLanguages;
+        sessionIntPresets = intPresets;
+        sessionCdPresets = cdPresets;
+        sessionCustomInstr = customInstr;
 
         // Retrieve user memories for context injection
         let memoryContext = '';
@@ -391,6 +493,7 @@ export function setupSocketHandlers(io: Server) {
         } catch (memErr) {
           console.warn('[session] Memory retrieval skipped:', (memErr as any)?.message?.slice(0, 80));
         }
+        sessionMemoryContext = memoryContext;
 
         const angelInstructions = buildAngelInstructions(ownerLanguage, sessionMode, translateLanguages, intPresets, cdPresets, customInstr, memoryContext);
         const whisperHandler = (whisper: any) => {
@@ -550,6 +653,20 @@ export function setupSocketHandlers(io: Server) {
             // Echo gate: skip during TTS playback to prevent AI responding to its own voice
             if (realtime && !ttsPlaying) {
               realtime.feedTranscript(`[${label}]: ${data.text}`);
+            }
+
+            // Voice mode switch: "switch to code mode", "switch to translation", etc.
+            if (label === 'Owner') {
+              const lower = data.text.toLowerCase().trim();
+              const modeMatch = lower.match(/\b(?:switch|change|go)\s+to\s+(code|translation|translate|intelligence|hybrid)(?:\s+mode)?\b/)
+                || lower.match(/\b(code|translation|translate|intelligence|hybrid)\s+mode\b/);
+              if (modeMatch) {
+                const raw = modeMatch[1];
+                const target: 'translation' | 'intelligence' | 'hybrid' | 'code' =
+                  raw === 'translate' ? 'translation' : (raw as any);
+                // Async — don't block transcript flow
+                switchMode(target).catch((e) => console.error('[mode-switch] failed:', e));
+              }
             }
 
             // Voice wake word detection: "hi angel", "hey angel", "yo angel", "ok angel"
@@ -738,6 +855,17 @@ export function setupSocketHandlers(io: Server) {
     socket.on('session:instruct', (data: { text: string }) => {
       if (!realtime || !data?.text?.trim()) return;
       const directive = data.text.trim();
+
+      // Detect mode switch via text (e.g. "/switch to code" or "/mode code")
+      const modeMatch = directive.toLowerCase().match(/^(?:switch\s+to\s+|mode\s+|switch\s+mode\s+)?(code|translation|translate|intelligence|hybrid)(?:\s+mode)?$/);
+      if (modeMatch) {
+        const raw = modeMatch[1];
+        const target: 'translation' | 'intelligence' | 'hybrid' | 'code' =
+          raw === 'translate' ? 'translation' : (raw as any);
+        switchMode(target).catch((e) => console.error('[mode-switch] failed:', e));
+        return;
+      }
+
       liveDirectives.push(directive);
       console.log(`[session] Live directive: "${directive}"`);
       rebuildInstructions(); // Atomic rebuild preserves memory + adds all directives

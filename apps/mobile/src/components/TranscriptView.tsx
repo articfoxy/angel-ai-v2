@@ -32,6 +32,7 @@ const WHISPER_TYPE_CONFIG: Record<
   // Synthesized summary — what gets spoken via TTS
   code_summary: { icon: 'mic-outline', color: '#34d399', bg: 'rgba(52, 211, 153, 0.12)', label: 'Angel says' },
   code: { icon: 'code-slash-outline', color: '#7c7fff', bg: 'rgba(124, 127, 255, 0.12)', label: 'Code' },
+  mode_switch: { icon: 'swap-horizontal-outline', color: '#38bdf8', bg: 'rgba(56, 189, 248, 0.12)', label: 'Mode' },
   default: { icon: 'sparkles-outline', color: '#7c7fff', bg: 'rgba(124, 127, 255, 0.12)', label: 'Angel' },
 };
 
