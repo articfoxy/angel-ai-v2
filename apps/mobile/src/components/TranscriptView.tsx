@@ -49,78 +49,85 @@ interface TranscriptViewProps {
   whisperCards?: WhisperCardData[];
 }
 
-function groupSegmentsBySpeaker(
+/**
+ * Build a chronologically ordered timeline of transcripts and whispers.
+ * KEY: a whisper always ends the current transcript group. The next transcript
+ * starts a fresh block even if it's the same speaker — this prevents the
+ * conversation from looking like one continuous stream and makes it clear
+ * that Angel has "responded" to the previous segment.
+ */
+function buildTimeline(
   segments: TranscriptSegment[],
-  speakerNames: Record<string, string>
-): SpeakerGroup[] {
-  const groups: SpeakerGroup[] = [];
+  speakerNames: Record<string, string>,
+  whisperCards: WhisperCardData[]
+): TimelineItem[] {
+  // Annotate each segment with its timestamp as a "transcript" event
+  const events: Array<
+    | { kind: 'segment'; segment: TranscriptSegment; time: number }
+    | { kind: 'whisper'; card: WhisperCardData; time: number }
+  > = [];
 
-  for (const segment of segments) {
+  for (const s of segments) {
+    events.push({ kind: 'segment', segment: s, time: s.timestamp });
+  }
+  for (const w of whisperCards) {
+    const t = w.createdAt ? new Date(w.createdAt).getTime() : 0;
+    events.push({ kind: 'whisper', card: w, time: t });
+  }
+
+  // Sort by time so interleaved order matches reality
+  events.sort((a, b) => a.time - b.time);
+
+  const items: TimelineItem[] = [];
+  let currentGroup: SpeakerGroup | null = null;
+
+  const flushGroup = () => {
+    if (currentGroup) {
+      items.push({ kind: 'transcript', group: currentGroup });
+      currentGroup = null;
+    }
+  };
+
+  let groupCounter = 0;
+  for (const ev of events) {
+    if (ev.kind === 'whisper') {
+      // Whisper ends the current transcript group — next segment starts fresh
+      flushGroup();
+      items.push({ kind: 'whisper', card: ev.card });
+      continue;
+    }
+
+    const segment = ev.segment;
     const speakerKey = segment.speaker || 'unknown';
     const label = speakerNames[speakerKey] || speakerKey;
-    const lastGroup = groups[groups.length - 1];
 
-    if (lastGroup && lastGroup.speaker === label) {
+    if (currentGroup && currentGroup.speaker === label) {
+      // Continuation of same speaker (and no whisper since) — merge
       if (segment.isFinal) {
         const trimmed = segment.text.trim();
         if (trimmed) {
-          lastGroup.finalText = lastGroup.finalText
-            ? `${lastGroup.finalText} ${trimmed}`
+          currentGroup.finalText = currentGroup.finalText
+            ? `${currentGroup.finalText} ${trimmed}`
             : trimmed;
         }
-        lastGroup.interimText = '';
+        currentGroup.interimText = '';
       } else {
-        lastGroup.interimText = segment.text.trim();
+        currentGroup.interimText = segment.text.trim();
       }
-      lastGroup.timestamp = segment.timestamp;
+      currentGroup.timestamp = segment.timestamp;
     } else {
-      const group: SpeakerGroup = {
+      // Different speaker — close previous group, start new
+      flushGroup();
+      currentGroup = {
         speaker: label,
-        finalText: '',
-        interimText: '',
-        key: `group-${groups.length}-${speakerKey}`,
+        finalText: segment.isFinal ? segment.text.trim() : '',
+        interimText: segment.isFinal ? '' : segment.text.trim(),
+        key: `group-${groupCounter++}-${speakerKey}`,
         timestamp: segment.timestamp,
       };
-      if (segment.isFinal) {
-        group.finalText = segment.text.trim();
-      } else {
-        group.interimText = segment.text.trim();
-      }
-      groups.push(group);
     }
   }
-
-  return groups;
-}
-
-/** Merge transcript groups and whisper cards into a single chronological timeline */
-function buildTimeline(groups: SpeakerGroup[], whisperCards: WhisperCardData[]): TimelineItem[] {
-  // Sort whispers oldest-first for correct chronological insertion
-  const sortedWhispers = [...whisperCards].sort((a, b) => {
-    const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-    const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-    return ta - tb;
-  });
-
-  // Two-pointer merge: both groups and sorted whispers are in chronological order
-  const items: TimelineItem[] = [];
-  let gi = 0;
-  let wi = 0;
-
-  while (gi < groups.length || wi < sortedWhispers.length) {
-    const groupTime = gi < groups.length ? groups[gi].timestamp : Infinity;
-    const whisperTime = wi < sortedWhispers.length
-      ? (sortedWhispers[wi].createdAt ? new Date(sortedWhispers[wi].createdAt!).getTime() : Infinity)
-      : Infinity;
-
-    if (groupTime <= whisperTime) {
-      items.push({ kind: 'transcript', group: groups[gi] });
-      gi++;
-    } else {
-      items.push({ kind: 'whisper', card: sortedWhispers[wi] });
-      wi++;
-    }
-  }
+  flushGroup();
 
   return items;
 }
@@ -128,14 +135,9 @@ function buildTimeline(groups: SpeakerGroup[], whisperCards: WhisperCardData[]):
 export function TranscriptView({ segments, speakerNames, whisperCards }: TranscriptViewProps) {
   const scrollRef = useRef<ScrollView>(null);
 
-  const groups = useMemo(
-    () => groupSegmentsBySpeaker(segments, speakerNames),
-    [segments, speakerNames]
-  );
-
   const timeline = useMemo(
-    () => buildTimeline(groups, whisperCards || []),
-    [groups, whisperCards]
+    () => buildTimeline(segments, speakerNames, whisperCards || []),
+    [segments, speakerNames, whisperCards]
   );
 
   useEffect(() => {
