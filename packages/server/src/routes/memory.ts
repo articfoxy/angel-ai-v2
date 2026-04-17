@@ -39,8 +39,9 @@ memoryRouter.get('/core', async (req: AuthRequest, res: Response) => {
   try {
     const blocks = await coreBlocks.getAll(req.userId!);
     res.json({ success: true, data: blocks });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch core blocks' });
+  } catch (err: any) {
+    console.error('[memory/core] failed:', err?.message);
+    res.status(500).json({ error: 'Failed to fetch core blocks', detail: err?.message?.slice(0, 200) });
   }
 });
 

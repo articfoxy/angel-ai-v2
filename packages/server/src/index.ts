@@ -218,25 +218,30 @@ const PORT = process.env.PORT || 3000;
 
 // Enable pgvector extension and create indices on startup (idempotent)
 async function initDatabase() {
+  // pgvector extension — independent
   try {
     await prisma.$executeRawUnsafe('CREATE EXTENSION IF NOT EXISTS vector');
     console.log('[db] pgvector extension enabled');
-    // Create HNSW vector indices (works on empty tables, unlike IVFFlat)
-    await prisma.$executeRawUnsafe(`
-      CREATE INDEX IF NOT EXISTS idx_memory_embedding
-      ON "Memory" USING hnsw (embedding vector_cosine_ops)
-    `);
-    await prisma.$executeRawUnsafe(`
-      CREATE INDEX IF NOT EXISTS idx_entity_embedding
-      ON "Entity" USING hnsw (embedding vector_cosine_ops)
-    `);
-    await prisma.$executeRawUnsafe(`
-      CREATE INDEX IF NOT EXISTS idx_reflection_embedding
-      ON "Reflection" USING hnsw (embedding vector_cosine_ops)
-    `);
-    console.log('[db] Vector indices ready');
+  } catch (err: any) {
+    console.warn('[db] pgvector extension setup skipped:', err?.message?.slice(0, 100));
+  }
 
-    // Clean up orphaned sessions from previous server instances/deploys
+  // HNSW vector indices on v2 memory tables — each wrapped individually so
+  // one failure doesn't skip the others.
+  const vectorTables = ['Fact', 'Episode', 'Reflection', 'Observation', 'Entity'];
+  for (const table of vectorTables) {
+    try {
+      await prisma.$executeRawUnsafe(
+        `CREATE INDEX IF NOT EXISTS "idx_${table.toLowerCase()}_embedding" ON "${table}" USING hnsw (embedding vector_cosine_ops)`,
+      );
+    } catch (err: any) {
+      console.warn(`[db] index on ${table} skipped:`, err?.message?.slice(0, 100));
+    }
+  }
+  console.log('[db] Vector indices ready');
+
+  // Clean up orphaned sessions from previous server instances/deploys
+  try {
     const cleaned = await prisma.session.updateMany({
       where: { status: { in: ['active', 'processing'] } },
       data: { status: 'ended', endedAt: new Date() },
@@ -245,13 +250,16 @@ async function initDatabase() {
       console.log(`[db] Cleaned ${cleaned.count} orphaned sessions from previous deploy`);
     }
   } catch (err: any) {
-    // Non-fatal: pgvector may not be available on some PostgreSQL hosts
-    console.warn('[db] pgvector setup skipped:', err?.message?.slice(0, 100));
+    console.warn('[db] orphaned session cleanup skipped:', err?.message?.slice(0, 100));
   }
 }
 
 initDatabase().then(() => {
   server.listen(PORT, () => {
     console.log(`Angel AI v2 server running on port ${PORT}`);
+    // Start in-process memory cron (nightly reflection + decay + TTL sweep)
+    import('./services/memory/cron').then(({ startMemoryCron }) => startMemoryCron()).catch((e) =>
+      console.warn('[memory-cron] failed to start:', e?.message),
+    );
   });
 });
