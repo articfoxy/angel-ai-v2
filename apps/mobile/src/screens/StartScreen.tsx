@@ -95,6 +95,7 @@ export function StartScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const [isActive, setIsActive] = useState(false);
+  const [isListening, setIsListening] = useState(false);
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [aiStatus, setAiStatus] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -404,10 +405,26 @@ export function StartScreen() {
     })();
   }, []);
 
+  // Auto-start the background session once settings are loaded.
+  // User doesn't see a "Start Session" button — session is always ready.
+  // Recording (mic) is controlled separately via the Listen button.
+  useEffect(() => {
+    if (!user || isActive || isStartingRef.current) return;
+    startSession({ startRecordingAfter: false }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
   const selectMode = useCallback((mode: AngelMode) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setAngelMode(mode);
     SecureStore.setItemAsync('angel_v2_mode', mode);
+    // If a session is already running, tell the server to switch mid-flight.
+    // session:instruct with just the mode name triggers the server's mode-switch
+    // detection (patterns: "code", "translation mode", "switch to X", etc.)
+    const sock = getSocket();
+    if (sock?.connected && isActiveRef.current) {
+      sock.emit('session:instruct', { text: mode });
+    }
   }, []);
 
   const toggleTranslateLang = useCallback((lang: string) => {
@@ -481,14 +498,26 @@ export function StartScreen() {
   }, []);
 
   const handleTest = () => {
+    // Test scripts require a fresh session and skip the mic — for simplicity
+    // we just trigger the test script on the existing session (or start one).
     Alert.alert('Test Conversation', 'Choose a scenario:', [
       {
         text: '🔬 Nuclear Fusion (Jargon)',
-        onPress: () => { testTypeRef.current = 'fusion'; testModeRef.current = true; handleToggle(); },
+        onPress: () => {
+          testTypeRef.current = 'fusion';
+          const s = getSocket();
+          if (s?.connected && isActive) s.emit('session:test', { type: 'fusion' });
+          else { testModeRef.current = true; startSession({ startRecordingAfter: false }); }
+        },
       },
       {
         text: '🇨🇳 Chinese Business Meeting',
-        onPress: () => { testTypeRef.current = 'chinese'; testModeRef.current = true; handleToggle(); },
+        onPress: () => {
+          testTypeRef.current = 'chinese';
+          const s = getSocket();
+          if (s?.connected && isActive) s.emit('session:test', { type: 'chinese' });
+          else { testModeRef.current = true; startSession({ startRecordingAfter: false }); }
+        },
       },
       { text: 'Cancel', style: 'cancel' },
     ]);
@@ -520,61 +549,15 @@ export function StartScreen() {
     codeTaskBusyRef.current = false;
   }, []);
 
-  const handleToggle = async () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-
-    if (isActive) {
-      // Show confirmation before stopping
-      Alert.alert('End Session?', 'This will stop recording and process your conversation.', [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'End Session',
-          style: 'destructive',
-          onPress: async () => {
-            await stopRecording();
-            if (timerRef.current) clearInterval(timerRef.current);
-
-            // Tell server to stop, then clean up immediately (no debrief wait)
-            const socket = getSocket();
-            if (socket && sessionId) {
-              socket.emit('session:stop', { sessionId });
-            }
-
-            setIsActive(false);
-            setIsReconnecting(false);
-            setAngelThinking(false);
-            setAiStatus(null);
-            setSessionId(null);
-            setSegments([]);
-            setWhisperCards([]);
-            setSpeakerNames({});
-            setElapsed(0);
-            startPayloadRef.current = null;
-            if (testRetryRef.current) { clearTimeout(testRetryRef.current); testRetryRef.current = null; }
-            disposeTTSPlayer();
-            cleanupSessionListeners();
-            disconnectSocket();
-            refetchSessions();
-          },
-        },
-      ]);
-    } else {
-      // Start session — guard against double-tap
-      if (isStartingRef.current) return;
-      isStartingRef.current = true;
-      try {
-        // Request microphone permission (skip in test mode — no mic needed)
-        if (!testModeRef.current) {
-          const hasPermission = await requestMicPermission();
-          if (!hasPermission) {
-            Alert.alert(
-              'Microphone Required',
-              'Angel AI needs microphone access to listen to your conversations. Please enable it in Settings.',
-              [{ text: 'OK' }]
-            );
-            return;
-          }
-        }
+  /**
+   * Start the background session (server-side). Does NOT start recording.
+   * User decides when to start/stop listening via the mic button.
+   * Auto-called on mount. Safe to call multiple times.
+   */
+  const startSession = async (opts: { startRecordingAfter?: boolean } = {}) => {
+    if (isActive || isStartingRef.current) return;
+    isStartingRef.current = true;
+    try {
 
         const session = await api.post<{ id: string }>('sessions', {});
         setSessionId(session.id);
@@ -676,24 +659,8 @@ export function StartScreen() {
             });
           };
           testRetryRef.current = setTimeout(tryTest, 2000);
-        } else {
-          // Start audio recording and stream raw PCM chunks to the server.
-          // Audio is sent as binary (ArrayBuffer) for 33% less bandwidth vs base64.
-          // IMPORTANT: We must slice the buffer to get an exact-size copy.
-          // Uint8Array.buffer can be larger than byteLength if the view is a subarray.
-          await startRecording((pcmBytes: Uint8Array) => {
-            // Drop audio chunks while Claude Code is working — prevents picking up
-            // stray speech during long code tasks and avoids polluting transcript.
-            if (codeTaskBusyRef.current) return;
-            const currentSocket = getSocket();
-            if (currentSocket?.connected) {
-              const exactBuffer = pcmBytes.buffer.slice(
-                pcmBytes.byteOffset,
-                pcmBytes.byteOffset + pcmBytes.byteLength
-              );
-              currentSocket.emit('audio', exactBuffer);
-            }
-          });
+        } else if (opts.startRecordingAfter) {
+          await beginRecording();
         }
         isStartingRef.current = false;
       } catch (err: any) {
@@ -705,15 +672,54 @@ export function StartScreen() {
         if (timerRef.current) clearInterval(timerRef.current);
         if (testRetryRef.current) { clearTimeout(testRetryRef.current); testRetryRef.current = null; }
         setIsActive(false);
+        setIsListening(false);
         setIsReconnecting(false);
         setSessionId(null);
         setElapsed(0);
         startPayloadRef.current = null;
         isStartingRef.current = false;
-        Alert.alert(
-          'Connection Failed',
-          err?.message || 'Could not start session. Please check your connection and try again.'
+        // Non-fatal — we auto-start on mount, don't spam alerts
+        console.warn('[session] start failed:', err?.message);
+      }
+  };
+
+  /** Start the mic and stream PCM to the server. */
+  const beginRecording = async () => {
+    const hasPermission = await requestMicPermission();
+    if (!hasPermission) {
+      Alert.alert('Microphone Required', 'Angel needs microphone access to listen. Enable it in Settings.');
+      return false;
+    }
+    await startRecording((pcmBytes: Uint8Array) => {
+      if (codeTaskBusyRef.current) return;
+      const currentSocket = getSocket();
+      if (currentSocket?.connected) {
+        const exactBuffer = pcmBytes.buffer.slice(
+          pcmBytes.byteOffset,
+          pcmBytes.byteOffset + pcmBytes.byteLength
         );
+        currentSocket.emit('audio', exactBuffer);
+      }
+    });
+    setIsListening(true);
+    return true;
+  };
+
+  /**
+   * Toggle microphone on/off. Does NOT end the session.
+   * Session persists; only the mic input is paused/resumed.
+   */
+  const toggleListening = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (isListening) {
+      await stopRecording().catch(() => {});
+      setIsListening(false);
+    } else {
+      // Ensure session exists first
+      if (!isActive) {
+        await startSession({ startRecordingAfter: true });
+      } else {
+        await beginRecording();
       }
     }
   };
@@ -726,22 +732,49 @@ export function StartScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={0}
     >
-      {/* Header */}
+      {/* Header — app title + live state */}
       <View style={styles.header}>
-        <View>
-          <Text style={styles.appTitle}>Angel AI</Text>
-          {isActive && (
-            <View style={styles.activeRow}>
-              <Animated.View style={[styles.activeDot, dotStyle]} />
-              <Text style={styles.activeText}>ACTIVE</Text>
-              <View style={styles.modeBadge}>
-                <Text style={styles.modeBadgeText}>{modeLabel}</Text>
-              </View>
-              <Text style={styles.timer}>{formatTimer(elapsed)}</Text>
+        <Text style={styles.appTitle}>Angel AI</Text>
+        <View style={styles.headerRight}>
+          {isListening && (
+            <View style={styles.liveBadge}>
+              <Animated.View style={[styles.liveDot, dotStyle]} />
+              <Text style={styles.liveText}>LIVE</Text>
             </View>
+          )}
+          {isActive && isListening && (
+            <Text style={styles.timer}>{formatTimer(elapsed)}</Text>
           )}
         </View>
       </View>
+
+      {/* Mode pills — tap to switch mid-session */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.modePillRow}
+      >
+        {ANGEL_MODES.map((m) => {
+          const selected = angelMode === m.id;
+          return (
+            <TouchableOpacity
+              key={m.id}
+              style={[styles.modePill, selected && styles.modePillActive]}
+              onPress={() => selectMode(m.id)}
+              activeOpacity={0.7}
+            >
+              <Ionicons
+                name={m.icon as any}
+                size={14}
+                color={selected ? colors.primary : colors.textSecondary}
+              />
+              <Text style={[styles.modePillLabel, selected && styles.modePillLabelActive]}>
+                {m.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
 
       {/* Reconnecting banner */}
       {isReconnecting && isActive && (
@@ -759,42 +792,13 @@ export function StartScreen() {
         </View>
       )}
 
-      {/* ═══ TOP: Transcript / Mode cards ═══ */}
+      {/* ═══ Transcript — always visible ═══ */}
       <View style={styles.activeContainer}>
-        {segments.length > 0 || isActive ? (
-          <TranscriptView
-            segments={segments}
-            speakerNames={speakerNames}
-            whisperCards={whisperCards}
-          />
-        ) : (
-          <ScrollView contentContainerStyle={styles.idleContent} showsVerticalScrollIndicator={false}>
-            {/* Mode cards */}
-            <View style={styles.modeGrid}>
-              {ANGEL_MODES.map((m) => (
-                <TouchableOpacity
-                  key={m.id}
-                  style={[styles.modeCard, angelMode === m.id && styles.modeCardActive]}
-                  onPress={() => selectMode(m.id)}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.modeCardHeader}>
-                    <Ionicons name={m.icon as any} size={18} color={angelMode === m.id ? colors.primary : colors.textSecondary} />
-                    <Text style={[styles.modeCardLabel, angelMode === m.id && styles.modeCardLabelActive]}>{m.label}</Text>
-                    {angelMode === m.id && <Ionicons name="checkmark-circle" size={16} color={colors.primary} />}
-                  </View>
-                  <Text style={styles.modeCardDesc}>{m.desc}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            {/* Test button */}
-            <TouchableOpacity style={styles.testButton} onPress={handleTest} activeOpacity={0.7}>
-              <Ionicons name="flask-outline" size={14} color={colors.primary} />
-              <Text style={styles.testButtonText}>Test with Sample</Text>
-            </TouchableOpacity>
-          </ScrollView>
-        )}
+        <TranscriptView
+          segments={segments}
+          speakerNames={speakerNames}
+          whisperCards={whisperCards}
+        />
       </View>
 
       {/* ═══ LIVE STATUS BANNER — thinking / code task ═══ */}
@@ -838,13 +842,13 @@ export function StartScreen() {
           placeholder={
             codeTaskStatus === 'dispatching' || codeTaskStatus === 'working'
               ? '🔒 Claude Code is working — input paused...'
-              : isActive ? 'Talk to Angel... ( /command )' : 'Type to Angel after starting...'
+              : 'Talk to Angel... ( /command )'
           }
           placeholderTextColor={colors.textTertiary}
           returnKeyType="send"
           onSubmitEditing={sendMessage}
           blurOnSubmit={false}
-          editable={isActive && codeTaskStatus !== 'dispatching' && codeTaskStatus !== 'working'}
+          editable={codeTaskStatus !== 'dispatching' && codeTaskStatus !== 'working'}
         />
         {liveDirective.trim().length > 0 && (
           <TouchableOpacity onPress={sendMessage} style={styles.directiveSend}>
@@ -853,8 +857,8 @@ export function StartScreen() {
         )}
       </View>
 
-      {/* Speed toggle (active only) */}
-      {isActive && (
+      {/* Speed toggle */}
+      {(
         <View style={styles.speedRow}>
           {(['normal', 'fast', 'fastest', 'ultra'] as const).map((s) => (
             <TouchableOpacity
@@ -889,38 +893,51 @@ export function StartScreen() {
         </View>
       )}
 
-      {/* Bottom bar */}
+      {/* Bottom bar — Listen toggle + Ask / Stop */}
       <View style={styles.bottomControls}>
-        {isActive && (
+        <TouchableOpacity
+          onPress={() => setShowGain(!showGain)}
+          style={[styles.gainToggle, showGain && { backgroundColor: colors.primaryMuted }]}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Ionicons name="volume-high-outline" size={18} color={showGain ? colors.primary : colors.textSecondary} />
+        </TouchableOpacity>
+
+        {/* Listen / Pause button — toggles mic only, never ends session */}
+        <TouchableOpacity
+          onPress={toggleListening}
+          style={[styles.listenBtn, isListening && styles.listenBtnActive]}
+          activeOpacity={0.8}
+        >
+          <Ionicons
+            name={isListening ? 'mic' : 'mic-off-outline'}
+            size={18}
+            color={isListening ? '#ffffff' : colors.text}
+          />
+          <Text style={[styles.listenBtnText, isListening && styles.listenBtnTextActive]}>
+            {isListening ? 'Listening' : 'Listen'}
+          </Text>
+        </TouchableOpacity>
+
+        {(angelThinking || codeTaskStatus === 'dispatching' || codeTaskStatus === 'working') ? (
           <TouchableOpacity
-            onPress={() => setShowGain(!showGain)}
-            style={[styles.gainToggle, showGain && { backgroundColor: colors.primaryMuted }]}
+            onPress={handleAngelStop}
+            style={styles.stopAngelBtn}
             hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
-            <Ionicons name="volume-high-outline" size={18} color={showGain ? colors.primary : colors.textSecondary} />
+            <Ionicons name="stop-circle" size={18} color={colors.danger} />
+            <Text style={styles.stopAngelText}>Stop</Text>
           </TouchableOpacity>
-        )}
-        <AngelButton onPress={handleToggle} isActive={isActive} compact />
-        {isActive && (
-          (angelThinking || codeTaskStatus === 'dispatching' || codeTaskStatus === 'working') ? (
-            <TouchableOpacity
-              onPress={handleAngelStop}
-              style={styles.stopAngelBtn}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Ionicons name="stop-circle" size={18} color={colors.danger} />
-              <Text style={styles.stopAngelText}>Stop</Text>
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity
-              onPress={handleAngelActivate}
-              style={styles.askAngelBtn}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Ionicons name="sparkles" size={18} color={colors.primary} />
-              <Text style={styles.askAngelText}>Ask</Text>
-            </TouchableOpacity>
-          )
+        ) : (
+          <TouchableOpacity
+            onPress={handleAngelActivate}
+            style={[styles.askAngelBtn, !isActive && { opacity: 0.5 }]}
+            disabled={!isActive}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Ionicons name="sparkles" size={18} color={colors.primary} />
+            <Text style={styles.askAngelText}>Ask</Text>
+          </TouchableOpacity>
         )}
       </View>
     </KeyboardAvoidingView>
@@ -930,9 +947,94 @@ export function StartScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.sm,
-    paddingBottom: spacing.md,
+    paddingBottom: spacing.sm,
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  liveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(52, 211, 153, 0.15)',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+    borderRadius: radius.full,
+  },
+  liveDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: colors.success,
+  },
+  liveText: {
+    color: colors.success,
+    fontSize: fontSize.xs,
+    fontWeight: '700',
+    letterSpacing: 1.2,
+  },
+  // Mode pills (top bar) — tap to switch mid-session
+  modePillRow: {
+    flexDirection: 'row',
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.sm,
+    gap: spacing.xs + 2,
+  },
+  modePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: spacing.xs + 2,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  modePillActive: {
+    backgroundColor: colors.primaryMuted,
+    borderColor: colors.primary,
+  },
+  modePillLabel: {
+    color: colors.textSecondary,
+    fontSize: fontSize.sm,
+    fontWeight: '600',
+  },
+  modePillLabelActive: {
+    color: colors.primary,
+  },
+  // Listen button (replaces AngelButton's session toggle)
+  listenBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs + 2,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 2,
+    borderRadius: radius.full,
+    backgroundColor: colors.surfaceRaised,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  listenBtnActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  listenBtnText: {
+    color: colors.text,
+    fontSize: fontSize.sm,
+    fontWeight: '700',
+  },
+  listenBtnTextActive: {
+    color: '#ffffff',
   },
   appTitle: {
     color: colors.text,

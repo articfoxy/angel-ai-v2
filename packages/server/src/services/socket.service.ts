@@ -16,7 +16,7 @@ import { CartesiaTTSService } from './tts.service';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
 const MAX_SESSION_DURATION_MS = 7_200_000; // 2 hours
-const IDLE_TIMEOUT_MS = 300_000; // 5 minutes with no new transcript
+const IDLE_TIMEOUT_MS = 1_800_000; // 30 minutes — user may pause mic for extended periods in continuous-session UX
 const ALLOWED_OWNER_LANGUAGES = ['English', 'Chinese', 'Malay', 'Spanish', 'French', 'Japanese', 'Korean', 'Hindi'];
 const CARTESIA_API_KEY = process.env.CARTESIA_API_KEY || '';
 const DEFAULT_VOICE_ID = process.env.CARTESIA_VOICE_ID || 'a0e99841-438c-4a64-b679-ae501e7d6091';
@@ -934,6 +934,7 @@ export function setupSocketHandlers(io: Server) {
     // Text message from user — fed to AI and forces an immediate response
     socket.on('session:message', (data: { text: string }) => {
       if (!realtime || !data?.text?.trim()) return;
+      resetIdleTimer(); // Text activity keeps session alive even with mic paused
       const text = data.text.trim();
       console.log(`[session] Text message from owner: "${text.slice(0, 80)}"`);
 
@@ -956,6 +957,7 @@ export function setupSocketHandlers(io: Server) {
 
     socket.on('session:instruct', (data: { text: string }) => {
       if (!realtime || !data?.text?.trim()) return;
+      resetIdleTimer();
       const directive = data.text.trim();
 
       // Detect mode switch via text (e.g. "/switch to code" or "/mode code")
