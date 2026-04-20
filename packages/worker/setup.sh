@@ -191,7 +191,11 @@ function handleTask(taskId, prompt, context, requestedProject) {
   // Critical when worker runs as LaunchAgent — minimal env breaks auth
   const shell = process.env.SHELL || '/bin/zsh';
   const claudeCmd = `"${CLAUDE_BIN}" -p --model opus --dangerously-skip-permissions`;
-  const claude = spawn(shell, ['-lc', claudeCmd], { cwd, env: { ...process.env, HOME: process.env.HOME || require('os').homedir() } });
+  // Empty ANTHROPIC_API_KEY → CLI tries "" as key → 401. Strip it so OAuth wins.
+  const childEnv = { ...process.env, HOME: process.env.HOME || require('os').homedir() };
+  if (!childEnv.ANTHROPIC_API_KEY) delete childEnv.ANTHROPIC_API_KEY;
+  if (!childEnv.__CFBundleIdentifier) childEnv.__CFBundleIdentifier = 'com.anthropic.claudefordesktop';
+  const claude = spawn(shell, ['-lc', claudeCmd], { cwd, env: childEnv });
   activeTask = { taskId, process: claude, cancelled: false };
   claude.stdin.write(fullPrompt);
   claude.stdin.end();
