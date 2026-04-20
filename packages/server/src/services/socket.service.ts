@@ -518,6 +518,11 @@ export function setupSocketHandlers(io: Server) {
 
       transcriptBuffer = [];
       currentSessionId = null;
+      // Reset pre-Deepgram audio buffer state — otherwise a stale buffer
+      // from a previous session could flush into the NEXT session's Deepgram.
+      pendingAudio = [];
+      pendingAudioBytes = 0;
+      deepgramReady = false;
     }
 
     socket.on('session:start', async (payload: {
@@ -1049,6 +1054,12 @@ export function setupSocketHandlers(io: Server) {
 
       try {
         await deepgram.connect();
+        // Deepgram is ready — flush any audio frames that arrived during
+        // the session:start race window (memory retrieval + Realtime +
+        // TTS connect can take 2-5s, and the client starts streaming mic
+        // audio the instant it emits session:start).
+        deepgramReady = true;
+        flushPendingAudio();
       } catch (err: any) {
         const message = err?.message || 'Failed to connect to transcription service';
         console.error('Deepgram connection failed:', message);
@@ -1075,30 +1086,58 @@ export function setupSocketHandlers(io: Server) {
     });
 
     // Observability counters for audio ingest debugging.
-    // Logged once per second when audio is flowing OR dropping so we can see
-    // "listening state but no transcription" issues in Railway logs instead
-    // of silent failure.
     let audioFramesReceived = 0;
+    let audioFramesBuffered = 0;
     let audioFramesDropped = 0;
     let audioDropReason = '';
     let audioLastLogAt = 0;
     const logAudioStats = () => {
       const now = Date.now();
       if (now - audioLastLogAt < 3000) return;
-      if (audioFramesReceived === 0 && audioFramesDropped === 0) return;
+      if (audioFramesReceived === 0 && audioFramesDropped === 0 && audioFramesBuffered === 0) return;
       audioLastLogAt = now;
-      const reason = audioFramesDropped > 0 ? ` drop=${audioFramesDropped} (${audioDropReason})` : '';
-      console.log(`[audio] ${socket.userId?.slice(0, 8)} frames=${audioFramesReceived}${reason}`);
+      const parts: string[] = [];
+      if (audioFramesReceived > 0) parts.push(`frames=${audioFramesReceived}`);
+      if (audioFramesBuffered > 0) parts.push(`buffered=${audioFramesBuffered}`);
+      if (audioFramesDropped > 0) parts.push(`drop=${audioFramesDropped} (${audioDropReason})`);
+      console.log(`[audio] ${socket.userId?.slice(0, 8)} ${parts.join(' ')}`);
       audioFramesReceived = 0;
+      audioFramesBuffered = 0;
       audioFramesDropped = 0;
       audioDropReason = '';
     };
 
+    // Pre-Deepgram audio buffer. session:start is async and takes 2-5s (memory
+    // retrieval + Realtime + TTS + Deepgram connect) before `deepgram` is
+    // assigned and `.connect()` resolves. Client starts mic streaming the
+    // instant it emits session:start, so those first seconds of speech would
+    // otherwise be silently dropped — which manifested as "Listening state
+    // but no transcription ever appears."
+    //
+    // Cap at 10s of audio (~320KB at 16kHz/16-bit mono) so a stuck session
+    // can't leak memory. Flushed into Deepgram the moment it's ready.
+    const AUDIO_BUFFER_MAX_BYTES = 320_000;
+    let pendingAudio: Buffer[] = [];
+    let pendingAudioBytes = 0;
+    let deepgramReady = false;
+
+    const flushPendingAudio = () => {
+      if (!deepgram || pendingAudio.length === 0) return;
+      const count = pendingAudio.length;
+      for (const buf of pendingAudio) {
+        try { deepgram.sendAudio(buf); } catch {}
+      }
+      pendingAudio = [];
+      pendingAudioBytes = 0;
+      console.log(`[audio] ${socket.userId?.slice(0, 8)} flushed ${count} buffered frames to Deepgram`);
+    };
+
     socket.on('audio', (audioData: string | Buffer | ArrayBuffer) => {
-      // Only accept audio during an active session with a live Deepgram connection
-      if (!currentSessionId || !deepgram) {
+      // Drop only if there's no session at all. If a session is in progress
+      // but Deepgram hasn't finished connecting, buffer instead of dropping.
+      if (!currentSessionId) {
         audioFramesDropped++;
-        audioDropReason = !currentSessionId ? 'no-session' : 'no-deepgram';
+        audioDropReason = 'no-session';
         logAudioStats();
         return;
       }
@@ -1129,8 +1168,29 @@ export function setupSocketHandlers(io: Server) {
           return;
         }
 
-        deepgram.sendAudio(buffer);
-        audioFramesReceived++;
+        // Fast path — Deepgram is live, stream directly
+        if (deepgram && deepgramReady) {
+          deepgram.sendAudio(buffer);
+          audioFramesReceived++;
+          logAudioStats();
+          return;
+        }
+
+        // Slow path — session exists but Deepgram still connecting. Buffer
+        // the audio so the user's first words aren't lost. Capped at 10s
+        // so we can't leak memory if Deepgram never connects.
+        pendingAudioBytes += buffer.length;
+        if (pendingAudioBytes > AUDIO_BUFFER_MAX_BYTES) {
+          // Evict oldest until under cap — prefers newest audio on overflow
+          while (pendingAudioBytes > AUDIO_BUFFER_MAX_BYTES && pendingAudio.length > 0) {
+            const dropped = pendingAudio.shift()!;
+            pendingAudioBytes -= dropped.length;
+            audioFramesDropped++;
+            audioDropReason = 'buffer-overflow';
+          }
+        }
+        pendingAudio.push(buffer);
+        audioFramesBuffered++;
         logAudioStats();
       } catch (err) {
         audioFramesDropped++;
