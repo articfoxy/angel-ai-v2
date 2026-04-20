@@ -14,7 +14,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useApi } from '../hooks/useApi';
 import { api } from '../services/api';
 import { SessionCard } from '../components/SessionCard';
-import { colors, spacing, fontSize } from '../theme';
+import { colors, spacing, fontSize, fontFamily } from '../theme';
 import type { SessionsListResponse } from '../types';
 
 export function HistoryScreen() {
@@ -79,7 +79,7 @@ export function HistoryScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   header: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.md },
-  title: { color: colors.text, fontSize: fontSize.xxl, fontWeight: '700', letterSpacing: -0.5 },
+  title: { color: colors.text, fontSize: 30, fontFamily: fontFamily.serif, fontWeight: '500', letterSpacing: -0.4 },
   content: { paddingBottom: spacing.xxl },
   emptyState: { alignItems: 'center', paddingVertical: spacing.xxl * 2, gap: spacing.sm },
   emptyText: { color: colors.textSecondary, fontSize: fontSize.lg, fontWeight: '600' },

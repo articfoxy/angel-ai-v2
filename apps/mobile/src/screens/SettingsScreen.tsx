@@ -22,7 +22,7 @@ import { api } from '../services/api';
 import { getStoredToken } from '../services/auth';
 import { API_URL } from '../config';
 import { VoiceEnrollment } from '../components/VoiceEnrollment';
-import { colors, spacing, fontSize } from '../theme';
+import { colors, spacing, fontSize, fontFamily } from '../theme';
 
 const API_KEY_STORAGE = {
   openai: 'angel_v2_openai_key',
@@ -874,7 +874,7 @@ export function SettingsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   header: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
-  title: { color: colors.text, fontSize: fontSize.xxl, fontWeight: '700' },
+  title: { color: colors.text, fontSize: 30, fontFamily: fontFamily.serif, fontWeight: '500', letterSpacing: -0.4 },
   content: { paddingBottom: spacing.xl },
   section: { marginBottom: spacing.lg },
   sectionTitle: {

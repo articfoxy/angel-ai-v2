@@ -25,7 +25,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { api } from '../services/api';
-import { colors, spacing, fontSize, radius } from '../theme';
+import { colors, spacing, fontSize, radius, fontFamily } from '../theme';
 
 type Tab = 'core' | 'facts' | 'episodes' | 'habits' | 'thoughts' | 'commitments' | 'goals';
 
@@ -412,26 +412,29 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   header: {
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.sm,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.sm + 4,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  title: { color: colors.text, fontSize: fontSize.xxl, fontWeight: '700', letterSpacing: -0.5 },
-  privacyRow: { flexDirection: 'row', backgroundColor: colors.surfaceRaised, borderRadius: 8, padding: 2, gap: 2 },
-  privacyChip: { paddingHorizontal: spacing.sm, paddingVertical: 5, borderRadius: 6 },
-  privacyChipActive: { backgroundColor: colors.bg },
-  privacyText: { color: colors.textSecondary, fontSize: 11, fontWeight: '500' },
+  // Serif hero title — matches StartScreen "Angel" wordmark rhythm.
+  title: { color: colors.text, fontSize: 30, fontFamily: fontFamily.serif, fontWeight: '500', letterSpacing: -0.4 },
+  privacyRow: { flexDirection: 'row', backgroundColor: colors.surface, borderRadius: radius.md - 2, padding: 3, gap: 2 },
+  privacyChip: { paddingHorizontal: spacing.sm + 2, paddingVertical: 5, borderRadius: radius.sm },
+  privacyChipActive: { backgroundColor: colors.surfaceRaised },
+  privacyText: { color: colors.textTertiary, fontSize: 11, fontWeight: '500' },
   privacyTextActive: { color: colors.text, fontWeight: '600' },
-  tabsWrap: { paddingBottom: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
-  tabs: { paddingHorizontal: spacing.md, gap: 6 },
-  tab: { paddingHorizontal: spacing.sm + 2, paddingVertical: 6, borderRadius: 999, backgroundColor: colors.surfaceRaised },
+  // Tabs — softer, hairline divider, thin chips.
+  tabsWrap: { paddingBottom: spacing.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.borderSubtle },
+  tabs: { paddingHorizontal: spacing.lg, gap: spacing.xs + 2 },
+  tab: { paddingHorizontal: spacing.sm + 4, paddingVertical: 7, borderRadius: radius.full, backgroundColor: 'transparent' },
   tabActive: { backgroundColor: colors.primaryMuted },
-  tabLabel: { color: colors.textSecondary, fontSize: 13, fontWeight: '500' },
+  tabLabel: { color: colors.textTertiary, fontSize: 13, fontWeight: '500', letterSpacing: 0.1 },
   tabLabelActive: { color: colors.primary, fontWeight: '700' },
-  content: { padding: spacing.md, paddingBottom: spacing.xxl },
-  empty: { color: colors.textTertiary, fontSize: fontSize.sm, textAlign: 'center', paddingVertical: spacing.xl },
-  card: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md, borderWidth: 1, borderColor: colors.border },
+  content: { padding: spacing.md, paddingBottom: spacing.xxl, gap: spacing.sm + 2 },
+  empty: { color: colors.textTertiary, fontSize: fontSize.sm, textAlign: 'center', paddingVertical: spacing.xl, fontFamily: fontFamily.serif, fontStyle: 'italic' },
+  card: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.borderSubtle },
   cardHeader: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: spacing.xs },
   blockLabel: { color: colors.text, fontSize: fontSize.sm, fontWeight: '700', letterSpacing: 0.5 },
   blockMeta: { color: colors.textTertiary, fontSize: 10, marginTop: 1 },
@@ -442,7 +445,7 @@ const styles = StyleSheet.create({
   editSaveBtn: { backgroundColor: colors.primary, paddingHorizontal: spacing.md, paddingVertical: spacing.xs + 2, borderRadius: radius.sm },
   editSave: { color: '#fff', fontSize: fontSize.sm, fontWeight: '600' },
   // Fact cards
-  factCard: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md, borderWidth: 1, borderColor: colors.border },
+  factCard: { backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.borderSubtle },
   factMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
   statusPill: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999 },
   statusActive: { backgroundColor: 'rgba(52, 211, 153, 0.15)' },

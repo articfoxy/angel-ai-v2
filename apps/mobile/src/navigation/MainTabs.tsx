@@ -7,6 +7,7 @@ import { MemoryScreen } from '../screens/MemoryScreen';
 import { SkillsScreen } from '../screens/SkillsScreen';
 import { SettingsScreen } from '../screens/SettingsScreen';
 import { colors, fontSize } from '../theme';
+import { StyleSheet } from 'react-native';
 
 export type TabParamList = {
   Start: undefined;
@@ -24,19 +25,20 @@ export function MainTabs() {
       screenOptions={{
         headerShown: false,
         tabBarStyle: {
-          backgroundColor: colors.surface,
-          borderTopColor: colors.border,
-          borderTopWidth: 1,
+          backgroundColor: colors.bg,
+          borderTopColor: colors.borderSubtle,
+          borderTopWidth: StyleSheet.hairlineWidth,
           height: 84,
           paddingBottom: 28,
           paddingTop: 10,
         },
-        tabBarActiveTintColor: colors.text,
+        tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textTertiary,
         tabBarLabelStyle: {
           fontSize: fontSize.xs,
-          fontWeight: '500',
+          fontWeight: '600',
           marginTop: 2,
+          letterSpacing: 0.2,
         },
       }}
     >

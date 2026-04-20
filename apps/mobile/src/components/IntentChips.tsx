@@ -128,51 +128,54 @@ export const IntentChips: React.FC<Props> = ({ intents, onDismiss }) => {
 
 const styles = StyleSheet.create({
   scroll: {
-    maxHeight: 44,
+    maxHeight: 46,
   },
   row: {
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.lg,
     paddingBottom: spacing.xs,
     gap: spacing.xs + 2,
     flexDirection: 'row',
     alignItems: 'center',
   },
+  // Explicit-command chip — Claude orange, warm translucent fill.
   chip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingLeft: spacing.sm + 2,
-    paddingRight: spacing.xs + 2,
-    paddingVertical: 6,
+    paddingLeft: spacing.sm + 4,
+    paddingRight: spacing.xs + 4,
+    paddingVertical: 7,
     borderRadius: radius.full,
     backgroundColor: colors.primaryMuted,
-    borderWidth: 1,
-    borderColor: 'rgba(124, 127, 255, 0.35)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.primaryBorder,
     maxWidth: 240,
   },
+  // Auto-inferred chip — neutral surface so the user can tell Angel is guessing.
   chipPassive: {
-    backgroundColor: colors.surfaceRaised,
-    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    borderColor: colors.borderSubtle,
   },
   label: {
     color: colors.primary,
-    fontSize: fontSize.xs,
-    fontWeight: '700',
-    letterSpacing: -0.1,
+    fontSize: fontSize.xs + 1,
+    fontWeight: '600',
+    letterSpacing: 0.1,
     flexShrink: 1,
   },
   labelPassive: {
-    color: colors.text,
+    color: colors.textSecondary,
     fontWeight: '600',
   },
   remaining: {
-    color: colors.textSecondary,
+    color: colors.textTertiary,
     fontSize: fontSize.xs,
     fontWeight: '500',
     flexShrink: 0,
+    fontVariant: ['tabular-nums'],
   },
   close: {
     marginLeft: 2,
-    opacity: 0.6,
+    opacity: 0.5,
   },
 });

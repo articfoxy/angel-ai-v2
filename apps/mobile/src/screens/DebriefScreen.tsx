@@ -11,7 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { useApi } from '../hooks/useApi';
-import { colors, spacing, fontSize } from '../theme';
+import { colors, spacing, fontSize, fontFamily } from '../theme';
 import type { Session, Episode } from '../types';
 
 interface StructuredSummary {
@@ -275,7 +275,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
   },
-  title: { color: colors.text, fontSize: fontSize.xl, fontWeight: '700' },
+  title: { color: colors.text, fontSize: 26, fontFamily: fontFamily.serif, fontWeight: '500', letterSpacing: -0.3 },
   content: { paddingBottom: spacing.xl },
 
   // Loading / Error

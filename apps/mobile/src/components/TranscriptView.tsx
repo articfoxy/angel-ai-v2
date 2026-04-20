@@ -3,37 +3,40 @@ import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Alert } from 'rea
 import * as Clipboard from 'expo-clipboard';
 import { Ionicons } from '@expo/vector-icons';
 import type { TranscriptSegment, WhisperCardData } from '../types';
-import { colors, spacing, fontSize, radius } from '../theme';
+import { colors, spacing, fontSize, radius, fontFamily } from '../theme';
 
+// Harmonized speaker palette — all warm, calibrated against the bg.
 const SPEAKER_COLORS: Record<string, string> = {
-  Owner: '#7c7fff',
-  'Person A': '#34d399',
-  'Person B': '#fbbf24',
-  'Person C': '#f87171',
-  'Person D': '#38bdf8',
-  'Person E': '#f472b6',
+  Owner: colors.speakerOwner,
+  'Person A': colors.speakerA,
+  'Person B': colors.speakerB,
+  'Person C': colors.speakerC,
+  'Person D': colors.speakerD,
+  'Person E': colors.speakerE,
 };
 
-/** Whisper type styling — matches WhisperCard.tsx */
+/** Whisper type styling — matches WhisperCard.tsx. Same harmonized palette;
+ *  semantic colors only when they mean something, primary orange otherwise. */
 const WHISPER_TYPE_CONFIG: Record<
   string,
   { icon: keyof typeof Ionicons.glyphMap; color: string; bg: string; label: string }
 > = {
-  definition: { icon: 'book-outline', color: '#a78bfa', bg: 'rgba(167, 139, 250, 0.12)', label: 'Definition' },
-  response: { icon: 'chatbubble-outline', color: '#7c7fff', bg: 'rgba(124, 127, 255, 0.12)', label: 'Angel' },
-  memory_saved: { icon: 'checkmark-circle-outline', color: '#34d399', bg: 'rgba(52, 211, 153, 0.12)', label: 'Saved' },
-  search: { icon: 'search-outline', color: '#f472b6', bg: 'rgba(244, 114, 182, 0.12)', label: 'Search' },
-  insight: { icon: 'bulb-outline', color: '#7c7fff', bg: 'rgba(124, 127, 255, 0.12)', label: 'Insight' },
-  action: { icon: 'arrow-forward-circle-outline', color: '#34d399', bg: 'rgba(52, 211, 153, 0.12)', label: 'Action' },
-  warning: { icon: 'warning-outline', color: '#fbbf24', bg: 'rgba(251, 191, 36, 0.12)', label: 'Heads Up' },
-  memory: { icon: 'bookmark-outline', color: '#38bdf8', bg: 'rgba(56, 189, 248, 0.12)', label: 'Remembered' },
-  // Claude Code output — full raw text, monospace-ish, read-only
-  code_output: { icon: 'terminal-outline', color: '#94a3b8', bg: 'rgba(148, 163, 184, 0.08)', label: 'Claude Code' },
-  // Synthesized summary — what gets spoken via TTS
-  code_summary: { icon: 'mic-outline', color: '#34d399', bg: 'rgba(52, 211, 153, 0.12)', label: 'Angel says' },
-  code: { icon: 'code-slash-outline', color: '#7c7fff', bg: 'rgba(124, 127, 255, 0.12)', label: 'Code' },
-  mode_switch: { icon: 'swap-horizontal-outline', color: '#38bdf8', bg: 'rgba(56, 189, 248, 0.12)', label: 'Mode' },
-  default: { icon: 'sparkles-outline', color: '#7c7fff', bg: 'rgba(124, 127, 255, 0.12)', label: 'Angel' },
+  definition:   { icon: 'book-outline',              color: colors.primary,       bg: colors.primaryMuted, label: 'Definition' },
+  response:     { icon: 'chatbubble-outline',        color: colors.primary,       bg: colors.primaryMuted, label: 'Angel' },
+  memory_saved: { icon: 'checkmark-circle-outline',  color: colors.success,       bg: colors.successMuted, label: 'Saved' },
+  search:       { icon: 'search-outline',            color: colors.info,          bg: colors.infoMuted,    label: 'Search' },
+  insight:      { icon: 'bulb-outline',              color: colors.primary,       bg: colors.primaryMuted, label: 'Insight' },
+  action:       { icon: 'arrow-forward-circle-outline', color: colors.success,    bg: colors.successMuted, label: 'Action' },
+  warning:      { icon: 'warning-outline',           color: colors.warning,       bg: colors.warningMuted, label: 'Heads up' },
+  memory:       { icon: 'bookmark-outline',          color: colors.info,          bg: colors.infoMuted,    label: 'Remembered' },
+  pre_brief:    { icon: 'person-circle-outline',     color: colors.primary,       bg: colors.primaryMuted, label: 'Brief' },
+  // Claude Code output — muted, nearly chromeless so raw text stays readable.
+  code_output:  { icon: 'terminal-outline',          color: colors.textTertiary,  bg: colors.surface,      label: 'Claude Code' },
+  // Synthesized summary — what gets spoken via TTS.
+  code_summary: { icon: 'mic-outline',               color: colors.success,       bg: colors.successMuted, label: 'Angel says' },
+  code:         { icon: 'code-slash-outline',        color: colors.primary,       bg: colors.primaryMuted, label: 'Code' },
+  mode_switch:  { icon: 'swap-horizontal-outline',   color: colors.textSecondary, bg: colors.surfaceRaised, label: 'Intent' },
+  default:      { icon: 'sparkles-outline',          color: colors.primary,       bg: colors.primaryMuted, label: 'Angel' },
 };
 
 interface SpeakerGroup {
@@ -261,48 +264,55 @@ export function TranscriptView({ segments, speakerNames, whisperCards }: Transcr
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  content: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xxl },
+  content: { paddingHorizontal: spacing.lg, paddingBottom: spacing.xxl, paddingTop: spacing.md },
   emptyContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: spacing.xxl,
+    paddingVertical: spacing.huge,
     gap: spacing.sm,
   },
   emptyIconWrap: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: colors.surfaceRaised,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing.sm,
+    marginBottom: spacing.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.borderSubtle,
   },
+  // Serif empty state — feels like a handwritten invitation rather than a loading screen.
   emptyText: {
-    color: colors.textSecondary,
-    fontSize: fontSize.lg,
-    fontWeight: '600',
+    color: colors.text,
+    fontSize: fontSize.xl,
+    fontFamily: fontFamily.serif,
+    fontWeight: '500',
+    letterSpacing: -0.2,
   },
   emptySubtext: {
     color: colors.textTertiary,
     fontSize: fontSize.sm,
     textAlign: 'center',
-    lineHeight: 20,
+    lineHeight: fontSize.sm * 1.5,
+    marginTop: spacing.xs,
   },
   group: {
-    marginBottom: spacing.lg,
+    marginBottom: spacing.lg + 4,
   },
   speakerRow: {
     flexDirection: 'row',
     marginBottom: spacing.xs + 2,
   },
+  // Speaker pill — smaller, monochrome label with a colored dot.
   speakerPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: spacing.sm + 2,
+    paddingHorizontal: spacing.sm,
     paddingVertical: 3,
     borderRadius: radius.full,
-    gap: 5,
+    gap: 6,
   },
   speakerDot: {
     width: 6,
@@ -310,63 +320,67 @@ const styles = StyleSheet.create({
     borderRadius: 3,
   },
   speakerName: {
-    fontSize: fontSize.sm,
+    fontSize: 10,
     fontWeight: '700',
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 1.1,
   },
   textContainer: {
-    paddingLeft: spacing.sm,
+    paddingLeft: spacing.sm + 2,
   },
   text: {
     color: colors.text,
-    fontSize: fontSize.md,
-    lineHeight: 24,
-    letterSpacing: 0.1,
+    fontSize: fontSize.md + 1,
+    lineHeight: (fontSize.md + 1) * 1.5,
+    letterSpacing: 0,
+    fontFamily: fontFamily.sans,
   },
   textInterim: {
     color: colors.textTertiary,
     fontStyle: 'italic',
   },
-  // Inline whisper styles
+  // Inline whisper styles — softer warm card, serif content.
   inlineWhisper: {
-    backgroundColor: colors.surfaceRaised,
-    borderRadius: radius.sm,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
     borderLeftWidth: 3,
     borderLeftColor: colors.primary,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm + 2,
+    paddingVertical: spacing.sm + 4,
     marginBottom: spacing.lg,
     marginLeft: spacing.xs,
   },
   whisperHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: spacing.xs,
+    marginBottom: spacing.xs + 2,
   },
   whisperBadge: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
+    paddingVertical: 3,
     borderRadius: radius.full,
-    gap: 3,
+    gap: 4,
   },
   whisperLabel: {
-    fontSize: fontSize.xs,
+    fontSize: 10,
     fontWeight: '700',
-    letterSpacing: 0.3,
+    letterSpacing: 1.1,
     textTransform: 'uppercase',
   },
   whisperContent: {
     color: colors.text,
-    fontSize: fontSize.sm,
-    lineHeight: 20,
+    fontSize: fontSize.md,
+    fontFamily: fontFamily.serif,
+    lineHeight: fontSize.md * 1.5,
+    letterSpacing: -0.1,
   },
   whisperDetail: {
     color: colors.textSecondary,
-    fontSize: fontSize.xs,
-    marginTop: 2,
-    lineHeight: 17,
+    fontSize: fontSize.xs + 1,
+    fontFamily: fontFamily.sans,
+    marginTop: spacing.xs,
+    lineHeight: (fontSize.xs + 1) * 1.5,
   },
 });

@@ -15,7 +15,7 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { LinearGradient } from 'expo-linear-gradient';
-import { colors, spacing, fontSize } from '../theme';
+import { colors, spacing, fontSize, fontFamily, radius } from '../theme';
 import { useAuth } from '../hooks/useAuth';
 
 export function LoginScreen() {
@@ -81,7 +81,7 @@ export function LoginScreen() {
   };
 
   return (
-    <LinearGradient colors={['#050507', '#0d0d14', '#050507']} style={styles.gradientBg}>
+    <LinearGradient colors={[colors.bg, '#1A1208', colors.bg]} style={styles.gradientBg}>
       <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
       <KeyboardAvoidingView
         style={styles.container}
@@ -90,12 +90,12 @@ export function LoginScreen() {
         <StatusBar style="light" />
         <View style={styles.content}>
           <View style={styles.header}>
-            <LinearGradient colors={['#6366f1', '#8b5cf6']} style={styles.logoContainer}>
+            <LinearGradient colors={[colors.primary, '#B85A3D']} style={styles.logoContainer}>
               <Text style={styles.logoIcon}>✦</Text>
             </LinearGradient>
-            <Text style={styles.title}>Angel AI</Text>
+            <Text style={styles.title}>Angel</Text>
             <Text style={styles.subtitle}>
-              {isRegister ? 'Create your account' : 'Welcome back'}
+              {isRegister ? 'A companion you can keep.' : 'Welcome back.'}
             </Text>
           </View>
 
@@ -163,18 +163,18 @@ export function LoginScreen() {
 
             {error && <Text style={styles.error}>{error}</Text>}
 
-            <TouchableOpacity onPress={handleSubmit} disabled={isLoading} activeOpacity={0.8}>
+            <TouchableOpacity onPress={handleSubmit} disabled={isLoading} activeOpacity={0.85}>
               <LinearGradient
-                colors={['#6366f1', '#8b5cf6']}
+                colors={[colors.primary, '#C46749']}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
                 style={[styles.button, isLoading && styles.buttonDisabled]}
               >
                 {isLoading ? (
-                  <ActivityIndicator color={colors.text} />
+                  <ActivityIndicator color="#1b130d" />
                 ) : (
                   <Text style={styles.buttonText}>
-                    {isRegister ? 'Create Account' : 'Sign In'}
+                    {isRegister ? 'Create account' : 'Sign in'}
                   </Text>
                 )}
               </LinearGradient>
@@ -200,32 +200,46 @@ const styles = StyleSheet.create({
   gradientBg: { flex: 1 },
   container: { flex: 1 },
   content: { flex: 1, justifyContent: 'center', paddingHorizontal: spacing.lg },
-  header: { alignItems: 'center', marginBottom: spacing.xl },
+  header: { alignItems: 'center', marginBottom: spacing.xl + 8 },
   logoContainer: {
-    width: 72, height: 72, borderRadius: 20,
-    alignItems: 'center', justifyContent: 'center', marginBottom: spacing.md,
+    width: 76, height: 76, borderRadius: radius.xl,
+    alignItems: 'center', justifyContent: 'center', marginBottom: spacing.lg,
   },
-  logoIcon: { fontSize: 36, color: colors.text },
-  title: { fontSize: fontSize.xxl, fontWeight: '700', color: colors.text, marginBottom: spacing.xs },
-  subtitle: { fontSize: fontSize.lg, color: colors.textSecondary },
+  logoIcon: { fontSize: 34, color: '#1b130d' },
+  // Serif hero + calm subtitle — sets the tone before anything else loads.
+  title: {
+    fontSize: 46,
+    fontFamily: fontFamily.serif,
+    fontWeight: '500',
+    color: colors.text,
+    letterSpacing: -0.8,
+    marginBottom: spacing.xs + 2,
+  },
+  subtitle: {
+    fontSize: fontSize.md,
+    color: colors.textSecondary,
+    fontFamily: fontFamily.serif,
+    fontStyle: 'italic',
+    letterSpacing: -0.1,
+  },
   form: { gap: spacing.md },
   appleButton: { height: 52, width: '100%' },
   divider: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
-  dividerLine: { flex: 1, height: 1, backgroundColor: colors.border },
-  dividerText: { color: colors.textTertiary, fontSize: fontSize.sm, fontWeight: '500' },
-  inputContainer: { gap: spacing.xs },
-  inputLabel: { color: colors.textSecondary, fontSize: fontSize.sm, fontWeight: '600' },
+  dividerLine: { flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: colors.borderSubtle },
+  dividerText: { color: colors.textTertiary, fontSize: fontSize.xs, fontWeight: '500', letterSpacing: 0.3, textTransform: 'lowercase' },
+  inputContainer: { gap: spacing.xs + 2 },
+  inputLabel: { color: colors.textSecondary, fontSize: fontSize.xs, fontWeight: '600', letterSpacing: 0.8, textTransform: 'uppercase' },
   input: {
-    backgroundColor: colors.surface, borderRadius: 12, padding: spacing.md,
-    color: colors.text, fontSize: fontSize.lg, borderWidth: 1, borderColor: colors.border,
+    backgroundColor: colors.surface, borderRadius: radius.md, padding: spacing.md + 2,
+    color: colors.text, fontSize: fontSize.md + 1, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border,
   },
   error: { color: colors.danger, fontSize: fontSize.sm, textAlign: 'center' },
   button: {
-    borderRadius: 12, padding: spacing.md, alignItems: 'center',
-    justifyContent: 'center', height: 52, marginTop: spacing.sm,
+    borderRadius: radius.md, padding: spacing.md, alignItems: 'center',
+    justifyContent: 'center', height: 54, marginTop: spacing.sm + 2,
   },
   buttonDisabled: { opacity: 0.6 },
-  buttonText: { color: colors.text, fontSize: fontSize.lg, fontWeight: '700' },
+  buttonText: { color: '#1b130d', fontSize: fontSize.md + 1, fontWeight: '700', letterSpacing: 0.2 },
   toggleButton: { alignItems: 'center', paddingVertical: spacing.md },
-  toggleText: { color: colors.primary, fontSize: fontSize.md, fontWeight: '500' },
+  toggleText: { color: colors.primary, fontSize: fontSize.sm, fontWeight: '500', letterSpacing: 0.1 },
 });
