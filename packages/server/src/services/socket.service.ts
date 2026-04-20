@@ -767,6 +767,38 @@ export function setupSocketHandlers(io: Server) {
               }
             }
 
+            // Phase D: Intent parser — catch natural-language behavioral directives
+            // like "translate Chinese for 30 min", "handle jargon in this meeting",
+            // "don't interrupt for an hour". Cheap regex gate first.
+            if (label === 'Owner' && socket.userId) {
+              const uidC = socket.userId;
+              const sidC = currentSessionId;
+              (async () => {
+                try {
+                  const { intentParser } = await import('./intents/intent-parser.service');
+                  const { intentStack } = await import('./intents/intent-stack.service');
+                  if (!intentParser.isDirectiveLikely(data.text)) return;
+                  const intents = await intentParser.parse(data.text);
+                  if (!intents || intents.length === 0) return;
+                  for (const intent of intents) {
+                    await intentStack.push(uidC, sidC, intent);
+                  }
+                  // Confirm via whisper so user knows Angel caught the directive
+                  const labels = intents.map((i) => i.kind).join(', ');
+                  socket.emit('whisper', {
+                    id: uuid(),
+                    type: 'mode_switch',
+                    content: `🎯 Intent captured: ${labels}`,
+                    createdAt: new Date().toISOString(),
+                  });
+                  // Also rebuild instructions so brain picks up the new intent stack
+                  try { rebuildInstructions(); } catch {}
+                } catch (err: any) {
+                  console.warn('[intent-parser] transcript path failed:', err?.message?.slice(0, 100));
+                }
+              })();
+            }
+
             // Phase C: Mid-sentence entity prefetch. When a known entity is
             // mentioned in a live transcript, pre-load its facts into working
             // state so the brain has instant context on the next turn.

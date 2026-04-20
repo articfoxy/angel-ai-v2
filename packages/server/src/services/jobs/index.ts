@@ -255,6 +255,60 @@ const tasks: Record<string, Task> = {
       if (res.factsExpired || res.obsArchived) helpers.logger.info(`decay user=${userId.slice(0, 8)}: ${res.factsExpired} expired, ${res.obsArchived} archived`);
     } catch (e: any) { helpers.logger.warn(`decay user=${userId.slice(0, 8)}: ${e?.message?.slice(0, 80)}`); }
   },
+
+  // ─── PHASE E CADENCE JOBS ─────────────────────────────────────────────────
+  // Digests run as per-user sub-jobs so they parallelize cleanly
+
+  'digest.morning.all': async (_payload, helpers) => {
+    const users = await prisma.user.findMany({ select: { id: true } });
+    for (const u of users) await helpers.addJob('digest.morning.user', { userId: u.id }, { priority: 6 });
+    helpers.logger.info(`digest.morning: fanned out to ${users.length} users`);
+  },
+
+  'digest.evening.all': async (_payload, helpers) => {
+    const users = await prisma.user.findMany({ select: { id: true } });
+    for (const u of users) await helpers.addJob('digest.evening.user', { userId: u.id }, { priority: 6 });
+    helpers.logger.info(`digest.evening: fanned out to ${users.length} users`);
+  },
+
+  'digest.weekly.all': async (_payload, helpers) => {
+    const users = await prisma.user.findMany({ select: { id: true } });
+    for (const u of users) await helpers.addJob('digest.weekly.user', { userId: u.id }, { priority: 7 });
+    helpers.logger.info(`digest.weekly: fanned out to ${users.length} users`);
+  },
+
+  'digest.morning.user': async (payload: any, helpers) => {
+    const userId = String(payload?.userId || '');
+    if (!userId) return;
+    const { DigestComposer } = await import('../notifications/digest-composer.service');
+    const c = new DigestComposer();
+    try {
+      const id = await c.composeAndDeliver(userId, 'morning');
+      if (id) helpers.logger.info(`digest.morning user=${userId.slice(0, 8)}: ${id.slice(0, 8)}`);
+    } catch (e: any) { helpers.logger.warn(`digest.morning user=${userId.slice(0, 8)}: ${e?.message?.slice(0, 80)}`); }
+  },
+
+  'digest.evening.user': async (payload: any, helpers) => {
+    const userId = String(payload?.userId || '');
+    if (!userId) return;
+    const { DigestComposer } = await import('../notifications/digest-composer.service');
+    const c = new DigestComposer();
+    try {
+      const id = await c.composeAndDeliver(userId, 'evening');
+      if (id) helpers.logger.info(`digest.evening user=${userId.slice(0, 8)}: ${id.slice(0, 8)}`);
+    } catch (e: any) { helpers.logger.warn(`digest.evening user=${userId.slice(0, 8)}: ${e?.message?.slice(0, 80)}`); }
+  },
+
+  'digest.weekly.user': async (payload: any, helpers) => {
+    const userId = String(payload?.userId || '');
+    if (!userId) return;
+    const { DigestComposer } = await import('../notifications/digest-composer.service');
+    const c = new DigestComposer();
+    try {
+      const id = await c.composeAndDeliver(userId, 'weekly');
+      if (id) helpers.logger.info(`digest.weekly user=${userId.slice(0, 8)}: ${id.slice(0, 8)}`);
+    } catch (e: any) { helpers.logger.warn(`digest.weekly user=${userId.slice(0, 8)}: ${e?.message?.slice(0, 80)}`); }
+  },
 };
 
 // Cron schedule built programmatically. Each item = one cron rule.
@@ -268,6 +322,10 @@ const CRON_ITEMS = parseCronItems([
   { task: 'raw_archive.retention_sweep',     match: '0 5 * * *',   identifier: 'retention' },
   { task: 'memory.decay',                    match: '0 6 * * 0',   identifier: 'decay' },
   { task: 'memory.audit_prune',              match: '0 7 * * *',   identifier: 'audit-prune' },
+  // Phase E — cadence digests (UTC; adjust to user timezone in future)
+  { task: 'digest.morning.all',              match: '0 13 * * *',  identifier: 'morning' },  // 7am ET / 8pm HKT-ish
+  { task: 'digest.evening.all',              match: '0 1 * * *',   identifier: 'evening' },  // 7pm ET
+  { task: 'digest.weekly.all',               match: '0 0 * * 1',   identifier: 'weekly' },   // Sun 7pm ET
 ]);
 
 export async function startJobRunner(): Promise<void> {
