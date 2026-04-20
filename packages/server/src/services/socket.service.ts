@@ -1032,9 +1032,11 @@ export function setupSocketHandlers(io: Server) {
           socket.emit('speaker:identified', { speakerId, label });
         },
         onError: (errorMsg) => {
+          console.warn(`[deepgram] ${socket.userId?.slice(0, 8)} error: ${errorMsg}`);
           socket.emit('session:error', { sessionId, message: errorMsg });
         },
         onConnectionStatus: (status) => {
+          console.log(`[deepgram] ${socket.userId?.slice(0, 8)} status=${status}`);
           socket.emit('deepgram:status', { sessionId, status });
         },
         voiceprint: voiceprintRecord?.features ?? null,
@@ -1072,9 +1074,34 @@ export function setupSocketHandlers(io: Server) {
       console.log(`Session started: ${sessionId}`);
     });
 
+    // Observability counters for audio ingest debugging.
+    // Logged once per second when audio is flowing OR dropping so we can see
+    // "listening state but no transcription" issues in Railway logs instead
+    // of silent failure.
+    let audioFramesReceived = 0;
+    let audioFramesDropped = 0;
+    let audioDropReason = '';
+    let audioLastLogAt = 0;
+    const logAudioStats = () => {
+      const now = Date.now();
+      if (now - audioLastLogAt < 3000) return;
+      if (audioFramesReceived === 0 && audioFramesDropped === 0) return;
+      audioLastLogAt = now;
+      const reason = audioFramesDropped > 0 ? ` drop=${audioFramesDropped} (${audioDropReason})` : '';
+      console.log(`[audio] ${socket.userId?.slice(0, 8)} frames=${audioFramesReceived}${reason}`);
+      audioFramesReceived = 0;
+      audioFramesDropped = 0;
+      audioDropReason = '';
+    };
+
     socket.on('audio', (audioData: string | Buffer | ArrayBuffer) => {
       // Only accept audio during an active session with a live Deepgram connection
-      if (!currentSessionId || !deepgram) return;
+      if (!currentSessionId || !deepgram) {
+        audioFramesDropped++;
+        audioDropReason = !currentSessionId ? 'no-session' : 'no-deepgram';
+        logAudioStats();
+        return;
+      }
 
       try {
         let buffer: Buffer;
@@ -1088,14 +1115,26 @@ export function setupSocketHandlers(io: Server) {
           // Legacy base64 transport (fallback)
           buffer = Buffer.from(audioData, 'base64');
         } else {
+          audioFramesDropped++;
+          audioDropReason = 'bad-type';
+          logAudioStats();
           return;
         }
 
         // Reject empty or oversized chunks (max ~256KB ≈ 8s of audio)
-        if (buffer.length === 0 || buffer.length > 262144) return;
+        if (buffer.length === 0 || buffer.length > 262144) {
+          audioFramesDropped++;
+          audioDropReason = buffer.length === 0 ? 'empty' : 'too-large';
+          logAudioStats();
+          return;
+        }
 
         deepgram.sendAudio(buffer);
+        audioFramesReceived++;
+        logAudioStats();
       } catch (err) {
+        audioFramesDropped++;
+        audioDropReason = 'exception';
         console.warn('[socket] Failed to process audio chunk:', err);
       }
     });
