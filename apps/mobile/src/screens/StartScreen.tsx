@@ -707,13 +707,9 @@ export function StartScreen() {
       }
   };
 
-  /** Start the mic and stream PCM to the server. */
-  const beginRecording = async () => {
-    const hasPermission = await requestMicPermission();
-    if (!hasPermission) {
-      Alert.alert('Microphone Required', 'Angel needs microphone access to listen. Enable it in Settings.');
-      return false;
-    }
+  /** Start the native mic capture and stream PCM to the server. Assumes the
+   *  caller has already verified mic permission is granted. */
+  const startMicStream = async () => {
     await startRecording((pcmBytes: Uint8Array) => {
       if (codeTaskBusyRef.current) return;
       const currentSocket = getSocket();
@@ -726,35 +722,60 @@ export function StartScreen() {
       }
     });
     setIsListening(true);
+  };
+
+  /** Ask for permission + start streaming. Used by startSession's
+   *  startRecordingAfter path (auto-start post-mount). */
+  const beginRecording = async () => {
+    const hasPermission = await requestMicPermission();
+    if (!hasPermission) {
+      Alert.alert('Microphone Required', 'Angel needs microphone access to listen. Enable it in Settings.');
+      return false;
+    }
+    await startMicStream();
     return true;
   };
 
   /**
    * Toggle microphone on/off. Does NOT end the session.
    * Session persists; only the mic input is paused/resumed.
+   *
+   * Permission prompt fires in parallel with session setup — iOS renders
+   * the dialog (or resolves cached status) immediately instead of
+   * waiting 2-5s for the auto-started session to finish connecting. The
+   * server-side audio buffer catches anything the user says before
+   * Deepgram finishes setting up, so there's no race cost to firing
+   * the mic as soon as permission resolves.
    */
   const toggleListening = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     if (isListening) {
       await stopRecording().catch(() => {});
       setIsListening(false);
-    } else {
-      // If auto-start is still running, wait for it to finish before recording
-      // (otherwise startSession early-returns due to isStartingRef guard and
-      // the user's tap gets lost silently)
-      if (isStartingRef.current) {
-        const deadline = Date.now() + 5000;
-        while (isStartingRef.current && Date.now() < deadline) {
-          await new Promise((r) => setTimeout(r, 100));
-        }
-      }
-      // Ensure session exists first
-      if (!isActive) {
-        await startSession({ startRecordingAfter: true });
-      } else {
-        await beginRecording();
+      return;
+    }
+
+    // Fire permission prompt IMMEDIATELY — no waiting.
+    const permissionPromise = requestMicPermission();
+
+    // Meanwhile, let the auto-start session finish (or kick one off).
+    if (isStartingRef.current) {
+      const deadline = Date.now() + 5000;
+      while (isStartingRef.current && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 100));
       }
     }
+    if (!isActive) {
+      await startSession({ startRecordingAfter: false });
+    }
+
+    // Merge the two paths.
+    const hasPermission = await permissionPromise;
+    if (!hasPermission) {
+      Alert.alert('Microphone Required', 'Angel needs microphone access to listen. Enable it in Settings.');
+      return;
+    }
+    await startMicStream();
   };
 
   return (
