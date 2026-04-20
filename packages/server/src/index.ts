@@ -37,10 +37,11 @@ app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 
 // Rate limiting — protects expensive LLM + auth endpoints from DoS/credential stuffing
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 
-// Use userId (if authenticated) else IP, so authenticated users get a per-user quota
-const keyByUserOrIp = (req: any) => (req.userId as string) || req.ip || 'anonymous';
+// Use userId (if authenticated) else properly-handled IP (IPv6-safe via ipKeyGenerator)
+const keyByUserOrIp = (req: any, _res: any) =>
+  (req.userId as string) || ipKeyGenerator(req.ip || 'anonymous');
 
 // Auth endpoints: stricter per-IP (anonymous by definition)
 const authLimiter = rateLimit({
