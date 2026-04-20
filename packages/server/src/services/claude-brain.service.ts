@@ -24,6 +24,8 @@ interface ClaudeBrainConfig {
   instructions: string;
   ownerLanguage?: string;
   mode?: string;
+  /** Session owner — enables TempoService-driven adaptive trigger threshold. */
+  userId?: string;
   onWhisper: (whisper: ClaudeBrainWhisper) => void;
   onError?: (error: string) => void;
   onStatus?: (status: 'connected' | 'reconnecting' | 'disconnected' | 'error') => void;
@@ -74,10 +76,10 @@ export class ClaudeCodeBrain {
   private config: ClaudeBrainConfig;
   private messages: AnthropicMessage[] = [];
   private linesSinceLastResponse = 0;
-  private triggerThreshold = 2;
   private responseInProgress = false;
   private requestGeneration = 0; // Tracks which request is active (prevents stale abort resets)
   private ownerLanguage: string;
+  private userId?: string;
   private abortController: AbortController | null = null;
   private safetyTimer: ReturnType<typeof setTimeout> | null = null;
   private _isConnected = false;
@@ -85,6 +87,17 @@ export class ClaudeCodeBrain {
   constructor(config: ClaudeBrainConfig) {
     this.config = config;
     this.ownerLanguage = config.ownerLanguage || 'English';
+    this.userId = config.userId;
+  }
+
+  /** Adaptive threshold — reads TempoService for the current line count, falls
+   *  back to 2 if no user is attached (legacy path). */
+  private get triggerThreshold(): number {
+    if (!this.userId) return 2;
+    // Lazy import to avoid a circular dep at module load
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { tempoService } = require('./tempo.service');
+    return tempoService.getConfig(this.userId).realtimeTriggerLines as number;
   }
 
   get isConnected(): boolean { return this._isConnected; }

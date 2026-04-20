@@ -15,6 +15,7 @@
  */
 import type { Intent } from './intent-parser.service';
 import { intentStack } from './intent-stack.service';
+import { tempoService } from '../tempo.service';
 
 // Char-class detectors
 // - CJK: Chinese/Japanese/Korean
@@ -45,7 +46,9 @@ interface SlidingState {
 
 const STATE = new Map<string, SlidingState>(); // key: userId
 const WINDOW_MS = 90_000; // look at last 90s
-const MIN_BETWEEN_INFERENCE_MS = 45_000; // at most one inference per 45s per user
+// Minimum gap between inferences is tempo-driven (TempoService owns the knob):
+//   slow=60s, normal=45s, fast=25s, frenetic=15s. Fast convos need tighter
+//   detection or a language switch mid-meeting gets missed.
 const FOREIGN_CHAR_THRESHOLD = 6; // ≥6 foreign-script chars over window → translate
 const JARGON_HIT_THRESHOLD = 3;   // ≥3 jargon hits over window → jargon_explain
 
@@ -69,8 +72,9 @@ export class PassiveInferenceService {
     // Evict old
     st.transcripts = st.transcripts.filter((t) => now - t.ts <= WINDOW_MS);
 
-    // Rate-gate actual inference
-    if (now - st.lastInferenceAt < MIN_BETWEEN_INFERENCE_MS) return;
+    // Rate-gate actual inference — cadence scales with conversation tempo.
+    const minGapMs = tempoService.getConfig(userId).passiveInferenceMinGapMs;
+    if (now - st.lastInferenceAt < minGapMs) return;
 
     const windowText = st.transcripts.map((t) => t.text).join(' ');
 

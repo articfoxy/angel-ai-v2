@@ -16,8 +16,10 @@
  */
 import { prisma } from '../../index';
 import { responseOrchestrator } from './orchestrator.service';
+import { tempoService } from '../tempo.service';
 
-const HEARTBEAT_INTERVAL_MS = 3 * 60_000; // 3 min
+// First tick is delayed 60s regardless of tempo so we don't race session setup.
+const INITIAL_DELAY_MS = 60_000;
 
 interface HeartbeatContext {
   userId: string;
@@ -29,7 +31,10 @@ interface HeartbeatContext {
   onIntentsChanged?: () => void;
 }
 
-const timers = new Map<string, ReturnType<typeof setInterval>>();
+// One timeout handle per session. setInterval was the old pattern — we now
+// self-reschedule from inside each tick so the cadence can adapt to the
+// current tempo on the next hop (setInterval would lock in 3min forever).
+const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
 export class HeartbeatService {
   /** Start heartbeat for a user's session. Idempotent. */
@@ -37,30 +42,32 @@ export class HeartbeatService {
     const key = `${ctx.userId}:${ctx.sessionId || 'no-session'}`;
     if (timers.has(key)) return;
 
-    const tick = () => {
-      this.tick(ctx).catch((err) => {
+    const runTickAndReschedule = async () => {
+      // If stop() was called between schedule and fire, bail
+      if (!timers.has(key)) return;
+      try {
+        await this.tick(ctx);
+      } catch (err: any) {
         console.warn('[heartbeat] tick failed:', err?.message?.slice(0, 100));
-      });
+      }
+      if (!timers.has(key)) return;
+      // Re-read tempo for the next gap — this is the adaptive hop
+      const nextGapMs = tempoService.getConfig(ctx.userId).heartbeatMs;
+      const handle = setTimeout(runTickAndReschedule, nextGapMs);
+      timers.set(key, handle);
     };
 
-    // Fire first tick after 60s to avoid racing session:start setup
-    const initial = setTimeout(() => {
-      tick();
-      const iv = setInterval(tick, HEARTBEAT_INTERVAL_MS);
-      timers.set(key, iv);
-    }, 60_000);
-
-    // Store the timeout handle so stop() can clear it
-    timers.set(key, initial as any);
+    // First tick after INITIAL_DELAY_MS so session:start has time to settle
+    const initial = setTimeout(runTickAndReschedule, INITIAL_DELAY_MS);
+    timers.set(key, initial);
   }
 
   /** Stop the heartbeat for this session. */
   stop(userId: string, sessionId: string | null): void {
     const key = `${userId}:${sessionId || 'no-session'}`;
-    const iv = timers.get(key);
-    if (iv) {
-      clearInterval(iv);
-      clearTimeout(iv as any);
+    const handle = timers.get(key);
+    if (handle) {
+      clearTimeout(handle);
       timers.delete(key);
     }
   }

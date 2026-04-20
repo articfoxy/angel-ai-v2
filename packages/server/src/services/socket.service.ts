@@ -14,6 +14,7 @@ import { codeWorkerHub } from './codeworker.service';
 import { synthesizeCodeSummary } from './summarizer.service';
 import { CartesiaTTSService } from './tts.service';
 import { heartbeatService } from './notifications/heartbeat.service';
+import { tempoService } from './tempo.service';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
 const MAX_SESSION_DURATION_MS = 7_200_000; // 2 hours
@@ -85,12 +86,10 @@ export function setupSocketHandlers(io: Server) {
     let sessionMemoryContext = '';
     let lastMemoryContext = ''; // Cached for atomic prompt rebuilds
     let transcriptsSinceMemoryRefresh = 0;
-    const MEMORY_REFRESH_INTERVAL = 10;
-    // Entity prefetch cooldown — pgvector query burns an embedding call per run.
-    // Fire at most once every 12s per session, and only on multi-word utterances
-    // that look like they could contain a name.
+    // Entity prefetch cooldown is now driven by TempoService — pgvector query
+    // burns an embedding call per run, and fast conversations want a tighter
+    // loop. `lastEntityPrefetchMs` tracks the last-run timestamp per session.
     let lastEntityPrefetchMs = 0;
-    const ENTITY_PREFETCH_COOLDOWN_MS = 12_000;
 
     /** Atomically rebuild the Realtime AI prompt from base + memory + directives.
      *  If rebuildBase=true (e.g. worker projects changed), regenerates the base
@@ -206,6 +205,7 @@ export function setupSocketHandlers(io: Server) {
           apiKey: sessionAnthropicKey,
           ownerLanguage: sessionOwnerLanguage,
           mode: newMode,
+          userId: socket.userId,
           instructions: newInstructions,
           onWhisper: whisperHandler,
           onError: errorHandler,
@@ -216,6 +216,7 @@ export function setupSocketHandlers(io: Server) {
           apiKey: openaiKey,
           ownerLanguage: sessionOwnerLanguage,
           mode: newMode,
+          userId: socket.userId,
           instructions: newInstructions,
           onWhisper: whisperHandler,
           onError: errorHandler,
@@ -484,11 +485,12 @@ export function setupSocketHandlers(io: Server) {
       // Stop heartbeat — session is over, no more proactive pulses
       if (socket.userId) {
         heartbeatService.stop(socket.userId, currentSessionId);
-        // Reset passive inference window so a fresh session starts clean
+        // Reset per-user session state so a fresh session starts clean
         try {
           const { passiveInference } = await import('./intents/passive-inference.service');
           passiveInference.reset(socket.userId);
         } catch {}
+        tempoService.reset(socket.userId);
       }
 
       // Close services in parallel for faster cleanup
@@ -631,6 +633,7 @@ export function setupSocketHandlers(io: Server) {
             apiKey: anthropicKey,
             ownerLanguage,
             mode: sessionMode,
+            userId: socket.userId,
             instructions: angelInstructions,
             onWhisper: whisperHandler,
             onError: errorHandler,
@@ -642,6 +645,7 @@ export function setupSocketHandlers(io: Server) {
             apiKey: openaiKey,
             ownerLanguage,
             mode: sessionMode,
+            userId: socket.userId,
             instructions: angelInstructions,
             onWhisper: whisperHandler,
             onError: errorHandler,
@@ -764,9 +768,21 @@ export function setupSocketHandlers(io: Server) {
               transcriptBuffer = transcriptBuffer.slice(-40);
             }
 
-            // Periodic memory refresh + judge trigger — runs every N transcripts
+            // Adaptive cadence — record each final transcript's word count into
+            // TempoService. Every proactive loop reads current tempo to pick its
+            // cadence, so this one write feeds judge/heartbeat/passive/prefetch.
+            if (socket.userId) {
+              const words = data.text.trim().split(/\s+/).filter(Boolean).length;
+              tempoService.record(socket.userId, words);
+            }
+
+            // Periodic memory refresh + judge trigger — runs every N transcripts,
+            // where N shrinks as conversation tempo increases.
             transcriptsSinceMemoryRefresh++;
-            if (transcriptsSinceMemoryRefresh >= MEMORY_REFRESH_INTERVAL && realtime && socket.userId) {
+            const judgeN = socket.userId
+              ? tempoService.getConfig(socket.userId).judgeEveryNTranscripts
+              : 10;
+            if (transcriptsSinceMemoryRefresh >= judgeN && realtime && socket.userId) {
               transcriptsSinceMemoryRefresh = 0;
               const recentText = transcriptBuffer.slice(-5).join(' ');
               const uid = socket.userId;
@@ -923,16 +939,19 @@ export function setupSocketHandlers(io: Server) {
             // Phase C: Mid-sentence entity prefetch. When a known entity is
             // mentioned in a live transcript, pre-load its facts into working
             // state so the brain has instant context on the next turn.
-            // Rate-gated: at most once every 12s, and only on multi-word
-            // utterances (single words = unlikely to be meaningful context).
-            // pgvector similarity requires a fresh OpenAI embedding per call.
+            // Rate-gated by tempo — fast conversations get an 8s cooldown,
+            // slow ones get 20s. pgvector similarity requires a fresh OpenAI
+            // embedding per call, so we don't want to burn one per utterance.
             const prefetchNow = Date.now();
             const wordCount = data.text.trim().split(/\s+/).length;
+            const prefetchCooldownMs = socket.userId
+              ? tempoService.getConfig(socket.userId).entityPrefetchCooldownMs
+              : 12_000;
             const prefetchGatePassed =
               socket.userId &&
               data.text.length > 10 &&
               wordCount >= 3 &&
-              prefetchNow - lastEntityPrefetchMs > ENTITY_PREFETCH_COOLDOWN_MS;
+              prefetchNow - lastEntityPrefetchMs > prefetchCooldownMs;
             if (prefetchGatePassed) {
               lastEntityPrefetchMs = prefetchNow;
               const uidCopy = socket.userId!;

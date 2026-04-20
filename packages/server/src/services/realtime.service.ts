@@ -8,6 +8,7 @@
  * Text-only mode — no audio in/out (yet).
  */
 import WebSocket from 'ws';
+import { tempoService } from './tempo.service';
 
 interface RealtimeWhisper {
   type: string;
@@ -23,6 +24,9 @@ interface RealtimeConfig {
   instructions: string;
   ownerLanguage?: string;
   mode?: 'translation' | 'intelligence' | 'hybrid' | 'code';
+  /** Session owner — used by TempoService to pick an adaptive trigger
+   *  threshold. Without it, we fall back to the mode default. */
+  userId?: string;
   onWhisper: (whisper: RealtimeWhisper) => void;
   onError?: (error: string) => void;
   onStatus?: (status: 'connected' | 'reconnecting' | 'disconnected' | 'error') => void;
@@ -32,7 +36,8 @@ const REALTIME_URL = 'wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-pre
 const RECONNECT_DELAY_MS = 2000;
 const MAX_RECONNECT_ATTEMPTS = 5;
 
-function getTriggerThreshold(mode?: string): number {
+/** Static per-mode baseline — used when tempo service has no data yet. */
+function getBaselineTriggerThreshold(mode?: string): number {
   switch (mode) {
     case 'translation': return 1;
     case 'hybrid': return 2;
@@ -56,13 +61,32 @@ export class RealtimeService {
   private sessionConfigured = false;
   private ownerLanguage = 'English';
   private mode: string;
-  private triggerThreshold: number;
+  private userId?: string;
+  /** Baseline is set at construction; the effective value is computed per
+   *  feedTranscript() call by blending baseline with the current tempo. */
+  private baselineTriggerThreshold: number;
 
   constructor(config: RealtimeConfig) {
     this.config = config;
     this.ownerLanguage = config.ownerLanguage || 'English';
     this.mode = config.mode || 'intelligence';
-    this.triggerThreshold = getTriggerThreshold(this.mode);
+    this.userId = config.userId;
+    this.baselineTriggerThreshold = getBaselineTriggerThreshold(this.mode);
+  }
+
+  /** Current trigger threshold — baseline × tempo nudge. In fast conversations
+   *  we buffer more lines before responding (avoids constant interruption);
+   *  in slow ones we respond sooner. Returns the baseline if we have no
+   *  userId or no velocity samples yet. */
+  private get triggerThreshold(): number {
+    if (!this.userId) return this.baselineTriggerThreshold;
+    const tempoLines = tempoService.getConfig(this.userId).realtimeTriggerLines;
+    // Take the stricter (higher) of the two — mode defaults are often looser
+    // than the frenetic-tempo line count, but translation mode MUST stay
+    // responsive even in frenetic conversations.
+    return this.mode === 'translation'
+      ? this.baselineTriggerThreshold
+      : Math.max(this.baselineTriggerThreshold, tempoLines);
   }
 
   /** Whether the Realtime session is connected and configured */
