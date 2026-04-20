@@ -767,6 +767,31 @@ export function setupSocketHandlers(io: Server) {
               }
             }
 
+            // Phase C: Mid-sentence entity prefetch. When a known entity is
+            // mentioned in a live transcript, pre-load its facts into working
+            // state so the brain has instant context on the next turn.
+            // Fire-and-forget; doesn't block transcript flow.
+            if (socket.userId && data.text.length > 10) {
+              const uidCopy = socket.userId;
+              const sidCopy = currentSessionId;
+              (async () => {
+                try {
+                  const { entityService } = await import('./memory/entity.service');
+                  const { WorkingStateService } = await import('./memory/working-state.service');
+                  const mentioned = await entityService.findSimilar(uidCopy, data.text, 3);
+                  // Only count close matches (distance < 0.3 ≈ clearly relevant)
+                  const hits = mentioned.filter((e: any) => (e.distance ?? 1) < 0.3);
+                  if (hits.length > 0) {
+                    const ws = new WorkingStateService();
+                    await ws.set(uidCopy, sidCopy, 'current_topic' as any, {
+                      entities: hits.map((e) => ({ id: e.id, name: e.canonicalName, type: e.entityType })),
+                      detectedFrom: data.text.slice(0, 120),
+                    }, 10 * 60_000);
+                  }
+                } catch {}
+              })();
+            }
+
             // Voice wake word detection: "hi angel", "hey angel", "yo angel", "ok angel"
             if (label === 'Owner') {
               const lower = data.text.toLowerCase().trim();
@@ -989,6 +1014,39 @@ export function setupSocketHandlers(io: Server) {
       resetIdleTimer(); // Text activity keeps session alive even with mic paused
       const text = data.text.trim();
       console.log(`[session] Text message from owner: "${text.slice(0, 80)}"`);
+
+      // Phase B: "brief me on X" / "about to call X" / "hopping on with X" /
+      // "prep me for X" → direct BriefComposer path. Short-circuits normal brain
+      // flow so we respond in <4s with context.
+      const briefMatch = text.match(/^(?:brief me(?:\s+on)?|about to (?:call|meet|hop on with|talk to)|hopping on with|prep(?:\s+me)?(?:\s+for)?|meeting with|calling)\s+(.+)$/i);
+      if (briefMatch && socket.userId) {
+        const entityName = briefMatch[1].trim().replace(/[.,!?]+$/, '');
+        (async () => {
+          try {
+            const { BriefComposer } = await import('./notifications/brief-composer.service');
+            const { responseOrchestrator } = await import('./notifications/orchestrator.service');
+            const composer = new BriefComposer(sessionAnthropicKey);
+            const brief = await composer.compose({
+              userId: socket.userId!,
+              entityName,
+              reasonTrigger: 'manual_ask',
+            });
+            if (brief) {
+              await responseOrchestrator.propose({
+                userId: socket.userId!,
+                kind: 'pre_brief',
+                importance: 7,
+                content: brief.summary,
+                detail: `Brief for ${brief.entityName} · ${brief.citations.length} memories · ${brief.modelLatencyMs}ms`,
+                data: { entityId: brief.entityId, entityName: brief.entityName, briefCitations: brief.citations },
+              });
+            }
+          } catch (err: any) {
+            console.warn('[brief-on-demand] failed:', err?.message);
+          }
+        })();
+        return; // don't feed as normal transcript
+      }
 
       // Record as an observation (Layer C — append-only)
       if (socket.userId) {

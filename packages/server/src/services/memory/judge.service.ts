@@ -71,7 +71,15 @@ interface JudgeOutput {
     examples?: any[];
     confidence?: number;
   } | null;
-  entities?: Array<{ name: string; type: string; aliases?: string[] }>;
+  entities?: Array<{ name: string; type: 'person' | 'org' | 'place' | 'topic' | 'object' | 'product'; aliases?: string[] }>;
+  commitments?: Array<{
+    from: string;               // "user" | person name
+    to: string;                 // person name | "user"
+    description: string;
+    due_date?: string;          // ISO date | null
+    importance?: number;
+    confidence?: number;
+  }>;
   core_block_updates?: Record<string, string>;
   reasoning?: string;
 }
@@ -321,6 +329,71 @@ export class MemoryJudgeService {
       }
     }
 
+    // Phase B: Upsert Entity rows so pre-brief has a graph to query.
+    // Keep a name→id map for commitment resolution below.
+    const entityIdByName: Map<string, string> = new Map();
+    if (Array.isArray(output.entities)) {
+      const { entityService } = await import('./entity.service');
+      for (const e of output.entities) {
+        if (!e?.name || !e?.type) continue;
+        if (!['person', 'org', 'place', 'topic', 'object', 'product'].includes(e.type)) continue;
+        try {
+          const id = await entityService.upsert({
+            userId,
+            name: e.name,
+            type: e.type as any,
+            aliases: e.aliases,
+          });
+          entityIdByName.set(e.name.toLowerCase(), id);
+          for (const alias of e.aliases || []) entityIdByName.set(alias.toLowerCase(), id);
+        } catch (err: any) {
+          console.warn('[judge] entity upsert failed:', err?.message);
+        }
+      }
+    }
+
+    // Phase B: Extract Commitments. The judge emits them as separate objects;
+    // we resolve entity ids by name.
+    if (Array.isArray(output.commitments)) {
+      const { commitmentService } = await import('./commitment.service');
+      const { ContradictionDetector } = await import('../notifications/contradiction-detector.service').catch(() => ({ ContradictionDetector: null as any }));
+      for (const c of output.commitments) {
+        if (!c?.description || !c?.from || !c?.to) continue;
+        const fromEntityId = entityIdByName.get(c.from.toLowerCase());
+        const toEntityId = entityIdByName.get(c.to.toLowerCase());
+        let dueDate: Date | null = null;
+        if (c.due_date) {
+          const d = new Date(c.due_date);
+          if (!isNaN(d.getTime())) dueDate = d;
+        }
+        const commitmentId = await commitmentService.create({
+          userId,
+          fromName: c.from,
+          fromEntityId: fromEntityId || null,
+          toName: c.to,
+          toEntityId: toEntityId || null,
+          description: c.description,
+          dueDate,
+          importance: c.importance,
+          confidence: c.confidence,
+          sourceEpisodeIds: episodeCreated ? [episodeCreated] : [],
+          sourceObservationIds: observations.map((o) => o.id),
+        });
+        // Phase C: fire contradiction detector inline (runs even if class fails to import)
+        if (commitmentId && ContradictionDetector) {
+          try {
+            await new ContradictionDetector().checkAndAlert(userId, commitmentId, {
+              userId,
+              fromName: c.from,
+              toName: c.to,
+              description: c.description,
+              dueDate,
+            });
+          } catch {}
+        }
+      }
+    }
+
     // Procedure candidate (only create — promotion happens elsewhere)
     let proceduresProposed = 0;
     if (output.procedure_candidate) {
@@ -424,7 +497,17 @@ Rules for fact_ops:
 procedure_candidate: if the user issued a correction or gave a "from now on"
 rule that affects future behavior, propose a procedure. Otherwise null.
 
-entities: only new people/orgs/topics worth resolving. Skip duplicates.
+entities: array of {name, type, aliases?} for ALL distinct people/orgs/topics
+mentioned in this batch. type ∈ {person, org, place, topic, object, product}.
+Even if you've seen the entity before, emit it — the dedupe happens server-side.
+
+commitments: array of {from, to, description, due_date?, importance?, confidence?}.
+Extract any explicit promise made in the transcript:
+- "I'll send the deck Friday" → {from:"user", to:"them_name", description:"send deck", due_date:"YYYY-MM-DD"}
+- "Alice said she'd review by Thursday" → {from:"Alice", to:"user", description:"review by Thursday", due_date:"YYYY-MM-DD"}
+- Vague ("we should catch up sometime") → skip, too weak
+- Explicit follow-up ("will you send it?") → commitment from the other party
+Resolve relative dates ("Friday", "next Tuesday", "end of week") against today's date.
 
 core_block_updates: only for durable things about the USER themselves.
 Append small text, don't overwrite. Valid labels: user_profile, mission, comm_style.
