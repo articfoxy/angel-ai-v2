@@ -225,31 +225,42 @@ export class DeepgramService {
 
       // Store final segments as Observations (Layer C — append-only raw events).
       // The MemoryJudgeService batches these into Episodes + Facts on triggers.
+      // Route through ObservationService so privacy-mode + classification applies.
       if (isFinal && transcript.transcript.trim()) {
         const observedAt = new Date(this.sessionStartTime + (data.start ?? 0) * 1000);
-        const writePromise = prisma.observation.create({
-          data: {
-            sessionId: this.config.sessionId,
-            userId: this.config.userId,
-            observedAt,
-            modality: 'audio_transcript',
-            source: 'deepgram',
-            speaker: speakerLabel || `speaker_${speaker ?? 'unknown'}`,
-            content: transcript.transcript,
-            importance: 5,
-            privacyClass: 'public',
-            extractorVersions: { asr: 'deepgram-nova-2' },
-            schemaVersion: 1,
-            processed: false,
-          },
-        }).catch((err: Error) => {
-          this.episodeWriteErrors++;
-          console.error(`[Deepgram] Observation save error (#${this.episodeWriteErrors}):`, err.message);
-          if (this.episodeWriteErrors === 5) {
-            console.warn(`[Deepgram] ${this.episodeWriteErrors} observation write failures — transcript data may be lost`);
-            this.config.onError?.('Some transcript data could not be saved. Session will continue.');
+        const content = transcript.transcript;
+        const writePromise = (async () => {
+          try {
+            const { ObservationService } = await import('./memory/observation.service');
+            const { policyService } = await import('./memory/policy.service');
+            const [obs, profile] = await Promise.all([
+              Promise.resolve(new ObservationService()),
+              policyService.profileFor(this.config.userId),
+            ]);
+            const id = await obs.write({
+              sessionId: this.config.sessionId,
+              userId: this.config.userId,
+              observedAt,
+              modality: 'audio_transcript',
+              source: 'deepgram',
+              speaker: speakerLabel || `speaker_${speaker ?? 'unknown'}`,
+              content,
+              importance: 5,
+              extractorVersions: { asr: 'deepgram-nova-2' },
+            }, profile.privacyMode);
+            if (!id) {
+              // Policy denied persistence — log at debug level, not an error
+              // (this is expected behavior in privacy_meeting mode)
+            }
+          } catch (err: any) {
+            this.episodeWriteErrors++;
+            console.error(`[Deepgram] Observation save error (#${this.episodeWriteErrors}):`, err?.message);
+            if (this.episodeWriteErrors === 5) {
+              console.warn(`[Deepgram] ${this.episodeWriteErrors} observation write failures — transcript data may be lost`);
+              this.config.onError?.('Some transcript data could not be saved. Session will continue.');
+            }
           }
-        });
+        })();
 
         // Track pending writes so we can await them before closing
         this.pendingWrites.push(writePromise);

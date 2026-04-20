@@ -6,7 +6,7 @@ import { DeepgramService } from './deepgram.service';
 import { SearchService } from './search.service';
 import { RealtimeService, buildAngelInstructions } from './realtime.service';
 import { ExtractionService } from './memory/extraction.service';
-import { runPostSessionReflection } from './memory/reflection.service';
+import { runPostSessionMemoryJobs } from './memory/reflection.service';
 import { RetrievalService } from './memory/retrieval.service';
 import { PerplexityService } from './perplexity.service';
 import { ClaudeCodeBrain } from './claude-brain.service';
@@ -1237,8 +1237,8 @@ export function setupSocketHandlers(io: Server) {
             completedAt: new Date().toISOString(),
           });
 
-          // Run reflection + maintenance
-          runPostSessionReflection(userId).catch((err) => {
+          // Run reflection + maintenance (new signature — includes sessionId)
+          runPostSessionMemoryJobs(userId, sessionId, sessionOpenaiKey).catch((err) => {
             console.error('Post-session reflection/maintenance error:', err);
           });
         }).catch(async (err) => {

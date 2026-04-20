@@ -146,10 +146,32 @@ export class MemoryJudgeService {
     const { userId, sessionId, trigger } = params;
     const privacyMode = params.privacyMode ?? 'standard';
 
-    const observations = await this.obs.getUnprocessed(userId, sessionId ?? undefined, 100);
-    if (observations.length === 0) {
+    // ATOMIC CLAIM — select + mark processed in a single UPDATE...RETURNING so
+    // concurrent judge runs (periodic + session_end) cannot pick up the same
+    // batch. Any later observations arrive as processed=false and are claimed
+    // by the next run.
+    const claimed: Array<{
+      id: string; observedAt: Date; modality: string; source: string;
+      speaker: string | null; content: string; importance: number; payload: any;
+    }> = await prisma.$queryRawUnsafe(
+      `UPDATE "Observation"
+       SET processed = true
+       WHERE id IN (
+         SELECT id FROM "Observation"
+         WHERE "userId" = $1 AND processed = false
+           ${sessionId ? `AND "sessionId" = $2` : ''}
+         ORDER BY "observedAt" ASC
+         LIMIT 100
+         FOR UPDATE SKIP LOCKED
+       )
+       RETURNING id, "observedAt", modality, source, speaker, content, importance, payload`,
+      ...[userId, ...(sessionId ? [sessionId] : [])],
+    );
+
+    if (claimed.length === 0) {
       return { observationsProcessed: 0, episodeCreated: null, factsAdded: 0, factsUpdated: 0, factsSuperseded: 0, proceduresProposed: 0 };
     }
+    const observations = claimed;
 
     // Context for the judge
     const [recentEpisodes, coreBlockText, workingStateText] = await Promise.all([
@@ -177,8 +199,8 @@ export class MemoryJudgeService {
       });
     } catch (err) {
       console.error('[judge] LLM call failed:', (err as any)?.message);
-      // Still mark observations processed to prevent infinite reprocessing
-      await this.obs.markProcessed(observations.map((o) => o.id));
+      // Observations already claimed (processed=true). If LLM is down we lose
+      // this batch — preferable to infinite reprocessing + duplicate facts.
       return { observationsProcessed: observations.length, episodeCreated: null, factsAdded: 0, factsUpdated: 0, factsSuperseded: 0, proceduresProposed: 0 };
     }
 
@@ -301,8 +323,8 @@ export class MemoryJudgeService {
       } catch {}
     }
 
-    // Mark all observations processed
-    await this.obs.markProcessed(observations.map((o) => o.id));
+    // Observations were claimed (processed=true) atomically at the top of _run.
+    // No additional mark-processed needed here.
 
     return {
       observationsProcessed: observations.length,

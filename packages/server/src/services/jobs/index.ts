@@ -37,56 +37,35 @@ const tasks: Record<string, Task> = {
     if (count > 0) helpers.logger.info(`ttl_sweep: purged ${count} expired rows`);
   },
 
-  // Per-user reflection — fired daily by scheduler
+  // Per-user reflection — fires sub-jobs instead of iterating inline.
+  // Prevents single-tick OOM at scale; graphile-worker handles concurrency.
   'memory.day_end_reflection': async (payload: any, helpers) => {
-    const users = payload?.userId ? [{ id: String(payload.userId) }] : await prisma.user.findMany({ select: { id: true } });
-    const reflection = new ReflectionService();
-    let reflected = 0;
-    for (const u of users) {
-      try {
-        const id = await reflection.reflectOnDay(u.id);
-        if (id) reflected++;
-      } catch (err: any) {
-        helpers.logger.warn(`day_end user=${u.id.slice(0, 8)}: ${err?.message?.slice(0, 80)}`);
-      }
+    if (payload?.userId) {
+      // Sub-invocation: delegate to per-user task
+      await helpers.addJob('memory.user.reflect', { userId: String(payload.userId) });
+      return;
     }
-    helpers.logger.info(`day_end_reflection: ${reflected}/${users.length} users reflected`);
+    const users = await prisma.user.findMany({ select: { id: true } });
+    for (const u of users) await helpers.addJob('memory.user.reflect', { userId: u.id }, { priority: 5 });
+    helpers.logger.info(`day_end_reflection: fanned out to ${users.length} users`);
   },
 
-  // Candidate → active promotion — every 2h
   'memory.candidate_promote': async (_payload, helpers) => {
     const users = await prisma.user.findMany({ select: { id: true } });
-    const compaction = new CompactionService();
-    let promoted = 0;
-    for (const u of users) {
-      try { promoted += await compaction.promoteCandidates(u.id); } catch {}
-    }
-    if (promoted > 0) helpers.logger.info(`candidate_promote: promoted ${promoted} across ${users.length} users`);
+    for (const u of users) await helpers.addJob('memory.user.compact', { userId: u.id }, { priority: 4 });
+    if (users.length > 0) helpers.logger.info(`candidate_promote: fanned out to ${users.length} users`);
   },
 
-  // Compaction — daily, merge duplicate candidates
   'memory.compaction': async (_payload, helpers) => {
     const users = await prisma.user.findMany({ select: { id: true } });
-    const compaction = new CompactionService();
-    let merged = 0;
-    for (const u of users) {
-      try { merged += await compaction.mergeDuplicateFacts(u.id); } catch {}
-    }
-    helpers.logger.info(`compaction: merged ${merged}`);
+    for (const u of users) await helpers.addJob('memory.user.compact', { userId: u.id }, { priority: 4 });
+    helpers.logger.info(`compaction: fanned out to ${users.length} users`);
   },
 
-  // Decay — weekly, expire stale low-importance facts + archive old observations
   'memory.decay': async (_payload, helpers) => {
     const users = await prisma.user.findMany({ select: { id: true } });
-    const compaction = new CompactionService();
-    let facts = 0, obs = 0;
-    for (const u of users) {
-      try {
-        const res = await compaction.decay(u.id);
-        facts += res.factsExpired; obs += res.obsArchived;
-      } catch {}
-    }
-    helpers.logger.info(`decay: ${facts} facts expired, ${obs} obs archived`);
+    for (const u of users) await helpers.addJob('memory.user.decay', { userId: u.id }, { priority: 3 });
+    helpers.logger.info(`decay: fanned out to ${users.length} users`);
   },
 
   // Raw asset retention sweep — daily, delete past-retention archive objects
@@ -149,20 +128,106 @@ const tasks: Record<string, Task> = {
     if (!userId) return;
     const { FactsService } = await import('../memory/facts.service');
     const { EpisodeService } = await import('../memory/episode.service');
+    const { RawAssetService } = await import('../storage/raw-asset.service');
     const facts = new FactsService();
     const episodes = new EpisodeService();
+    const rawAssets = new RawAssetService();
     let count = 0;
+
+    // 1. Soft-forget facts + episodes (preserves audit chain)
     if (entity) count += await facts.forgetBySubject(userId, entity);
     if (dateFrom && dateTo) {
       const from = new Date(dateFrom), to = new Date(dateTo);
       count += await facts.forgetByDateRange(userId, from, to);
       count += await episodes.forgetByDateRange(userId, from, to);
     }
-    if (modality) {
-      const res = await prisma.observation.deleteMany({ where: { userId, modality } });
+
+    // 2. For observations matching modality/date — collect their contentRef
+    //    URIs so we can purge S3 blobs before hard-deleting the rows.
+    if (modality || (dateFrom && dateTo)) {
+      const obsWhere: any = { userId };
+      if (modality) obsWhere.modality = modality;
+      if (dateFrom && dateTo) obsWhere.observedAt = { gte: new Date(dateFrom), lte: new Date(dateTo) };
+      const obsWithMedia = await prisma.observation.findMany({
+        where: { ...obsWhere, contentRef: { not: null } },
+        select: { contentRef: true },
+      });
+      // Purge raw archive blobs + their metadata rows
+      for (const { contentRef } of obsWithMedia) {
+        if (!contentRef) continue;
+        try {
+          if (rawAssets.isEnabled) await rawAssets.delete(contentRef);
+          await prisma.rawAsset.deleteMany({ where: { userId, uri: contentRef } });
+        } catch (err: any) {
+          helpers.logger.warn(`raw-asset purge ${contentRef}: ${err?.message?.slice(0, 80)}`);
+        }
+      }
+      // Now hard-delete the observations themselves
+      const res = await prisma.observation.deleteMany({ where: obsWhere });
       count += res.count;
     }
+
+    // 3. Audit trail — record the forget operation (outlives the data)
+    await prisma.memoryAuditLog.create({
+      data: {
+        userId,
+        actorType: 'user',
+        operation: 'forget',
+        memoryType: 'observation',
+        memoryId: `forget-${Date.now()}`,
+        reason: reason || 'user-initiated',
+        after: { entity, dateFrom, dateTo, modality, forgottenCount: count },
+      },
+    }).catch(() => {});
+
     helpers.logger.info(`forget_workflow user=${userId.slice(0, 8)} reason=${reason || 'user'} forgotten=${count}`);
+  },
+
+  // Audit log retention — prune old audit records
+  'memory.audit_prune': async (_payload, helpers) => {
+    const retentionAuditCutoff = new Date(Date.now() - 30 * 24 * 3_600_000);  // 30d
+    const memoryAuditCutoff    = new Date(Date.now() - 90 * 24 * 3_600_000);  // 90d
+    const [retrievalRes, memoryRes] = await Promise.all([
+      prisma.retrievalAudit.deleteMany({ where: { createdAt: { lt: retentionAuditCutoff } } }),
+      // Keep 'forget' operation audits indefinitely (GDPR)
+      prisma.memoryAuditLog.deleteMany({
+        where: { createdAt: { lt: memoryAuditCutoff }, operation: { not: 'forget' } },
+      }),
+    ]);
+    helpers.logger.info(`audit_prune: retrieval=${retrievalRes.count}, memory=${memoryRes.count}`);
+  },
+
+  // Per-user fanout for reflection/decay — prevents single-tick OOM at scale
+  'memory.user.reflect': async (payload: any, helpers) => {
+    const userId = String(payload?.userId || '');
+    if (!userId) return;
+    const { ReflectionService } = await import('../memory/reflection.service');
+    const reflection = new ReflectionService();
+    try { await reflection.reflectOnDay(userId); }
+    catch (e: any) { helpers.logger.warn(`reflect user=${userId.slice(0, 8)}: ${e?.message?.slice(0, 80)}`); }
+  },
+
+  'memory.user.compact': async (payload: any, helpers) => {
+    const userId = String(payload?.userId || '');
+    if (!userId) return;
+    const { CompactionService } = await import('../memory/reflection.service');
+    const c = new CompactionService();
+    try {
+      const promoted = await c.promoteCandidates(userId);
+      const merged = await c.mergeDuplicateFacts(userId);
+      if (promoted || merged) helpers.logger.info(`compact user=${userId.slice(0, 8)}: promoted ${promoted}, merged ${merged}`);
+    } catch (e: any) { helpers.logger.warn(`compact user=${userId.slice(0, 8)}: ${e?.message?.slice(0, 80)}`); }
+  },
+
+  'memory.user.decay': async (payload: any, helpers) => {
+    const userId = String(payload?.userId || '');
+    if (!userId) return;
+    const { CompactionService } = await import('../memory/reflection.service');
+    const c = new CompactionService();
+    try {
+      const res = await c.decay(userId);
+      if (res.factsExpired || res.obsArchived) helpers.logger.info(`decay user=${userId.slice(0, 8)}: ${res.factsExpired} expired, ${res.obsArchived} archived`);
+    } catch (e: any) { helpers.logger.warn(`decay user=${userId.slice(0, 8)}: ${e?.message?.slice(0, 80)}`); }
   },
 };
 
@@ -176,6 +241,7 @@ const CRON_ITEMS = parseCronItems([
   { task: 'memory.compaction',               match: '0 4 * * *',   identifier: 'compaction' },
   { task: 'raw_archive.retention_sweep',     match: '0 5 * * *',   identifier: 'retention' },
   { task: 'memory.decay',                    match: '0 6 * * 0',   identifier: 'decay' },
+  { task: 'memory.audit_prune',              match: '0 7 * * *',   identifier: 'audit-prune' },
 ]);
 
 export async function startJobRunner(): Promise<void> {
@@ -211,4 +277,9 @@ export async function stopJobRunner(): Promise<void> {
 export async function enqueue(taskName: string, payload: any = {}, opts?: { runAt?: Date; priority?: number }): Promise<void> {
   if (!runner) return;
   await runner.addJob(taskName, payload, { runAt: opts?.runAt, priority: opts?.priority });
+}
+
+/** Is the job runner currently alive? Used by /health/ready. */
+export function isJobRunnerAlive(): boolean {
+  return runner !== null;
 }

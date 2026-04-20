@@ -35,20 +35,30 @@ const DEFAULT_TTL_MS: Record<WorkingStateKey, number> = {
   temporary_constraints: 60 * 60_000,
 };
 
+// Sentinel for rows not scoped to a specific session. Must be used CONSISTENTLY
+// for where + create paths; otherwise Prisma generates mismatched SQL and
+// lookups don't find the rows that were upserted.
+const NO_SESSION = '';
+
+function sidFor(sessionId: string | null | undefined): string {
+  return sessionId ?? NO_SESSION;
+}
+
 export class WorkingStateService {
   async set(userId: string, sessionId: string | null, key: WorkingStateKey, value: any, ttlMs?: number): Promise<void> {
     const ttl = ttlMs ?? DEFAULT_TTL_MS[key];
     const ttlAt = new Date(Date.now() + ttl);
+    const sid = sidFor(sessionId);
     await prisma.workingState.upsert({
-      where: { userId_sessionId_key: { userId, sessionId: sessionId ?? '', key } },
-      create: { userId, sessionId, key, value, ttlAt },
+      where: { userId_sessionId_key: { userId, sessionId: sid, key } },
+      create: { userId, sessionId: sid, key, value, ttlAt },
       update: { value, ttlAt },
     });
   }
 
   async get(userId: string, sessionId: string | null, key: WorkingStateKey): Promise<any | null> {
     const row = await prisma.workingState.findUnique({
-      where: { userId_sessionId_key: { userId, sessionId: sessionId ?? '', key } },
+      where: { userId_sessionId_key: { userId, sessionId: sidFor(sessionId), key } },
     });
     if (!row) return null;
     if (row.ttlAt && row.ttlAt.getTime() < Date.now()) {
@@ -83,7 +93,7 @@ export class WorkingStateService {
   /** Get all live entries for a session — for prompt rendering. */
   async getAll(userId: string, sessionId: string | null): Promise<Record<string, any>> {
     const rows = await prisma.workingState.findMany({
-      where: { userId, sessionId: sessionId ?? null },
+      where: { userId, sessionId: sidFor(sessionId) },
     });
     const out: Record<string, any> = {};
     const now = Date.now();

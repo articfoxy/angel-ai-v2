@@ -36,6 +36,41 @@ const io = new SocketServer(server, {
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 
+// Rate limiting — protects expensive LLM + auth endpoints from DoS/credential stuffing
+import rateLimit from 'express-rate-limit';
+
+// Use userId (if authenticated) else IP, so authenticated users get a per-user quota
+const keyByUserOrIp = (req: any) => (req.userId as string) || req.ip || 'anonymous';
+
+// Auth endpoints: stricter per-IP (anonymous by definition)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many auth attempts. Try again in 15 min.' },
+});
+
+// Memory endpoints: per-user quota (LLM-expensive)
+const memoryLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60, // 60 req/min per user — generous for the UI, blocks runaway bots
+  keyGenerator: keyByUserOrIp,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Rate limit exceeded. Please slow down.' },
+});
+
+// Worker dispatch / LLM-heavy endpoints
+const llmHeavyLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  keyGenerator: keyByUserOrIp,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'LLM rate limit exceeded. Please pace your requests.' },
+});
+
 // Health check
 app.get('/health', (_, res) => res.json({ status: 'ok', version: '2.0.0' }));
 
@@ -50,8 +85,13 @@ app.get('/health/ready', async (_, res) => {
     checks.raw_archive = svc.isEnabled ? (await svc.ping() ? 'ok' : 'unreachable') : 'disabled';
   } catch { checks.raw_archive = 'err'; }
   checks.otel = process.env.OTEL_ENABLED === 'true' ? 'enabled' : 'disabled';
-  checks.jobs = 'running'; // we'd need a handle to the runner to actually check
-  res.json({ status: Object.values(checks).every((v) => v === 'ok' || v === 'disabled' || v === 'enabled' || v === 'running') ? 'ok' : 'degraded', checks, version: '2.0.0' });
+  try {
+    const { isJobRunnerAlive } = await import('./services/jobs');
+    checks.jobs = isJobRunnerAlive() ? 'running' : 'down';
+  } catch { checks.jobs = 'err'; }
+  const healthy = checks.db === 'ok' && (checks.jobs === 'running' || checks.jobs === 'disabled')
+                  && (checks.raw_archive === 'ok' || checks.raw_archive === 'disabled');
+  res.status(healthy ? 200 : 503).json({ status: healthy ? 'ok' : 'degraded', checks, version: '2.0.0' });
 });
 
 // Debug endpoint — check env vars (authenticated to prevent key prefix leaks)
@@ -146,15 +186,15 @@ app.get('/debug/deepgram', authenticateToken, async (_, res) => {
 });
 
 // Public routes (no auth middleware)
-app.use('/api/auth', authRouter);
+app.use('/api/auth', authLimiter, authRouter);
 
 // Protected routes
 app.use('/api/voices', authenticateToken, voicesRouter);
 app.use('/api/sessions', authenticateToken, sessionsRouter);
-app.use('/api/memory', authenticateToken, memoryRouter);
+app.use('/api/memory', authenticateToken, memoryLimiter, memoryRouter);
 app.use('/api/skills', authenticateToken, skillsRouter);
 app.use('/api/voiceprint', authenticateToken, voiceprintRouter);
-app.use('/api/workers', authenticateToken, workersRouter);
+app.use('/api/workers', authenticateToken, llmHeavyLimiter, workersRouter);
 
 // Socket.io
 setupSocketHandlers(io);
@@ -226,12 +266,18 @@ server.on('upgrade', (req, socket, head) => {
   }
 });
 
-// Startup safety checks
+// Startup safety checks — FATAL in production to prevent token forgery
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET === 'dev-secret') {
-  const level = process.env.NODE_ENV === 'production' ? 'ERROR' : 'WARN';
-  console[level === 'ERROR' ? 'error' : 'warn'](
-    `[${level}] JWT_SECRET is ${!process.env.JWT_SECRET ? 'not set' : '"dev-secret"'} — using insecure fallback. Set a strong JWT_SECRET in production!`
-  );
+  if (process.env.NODE_ENV === 'production') {
+    console.error('[FATAL] JWT_SECRET is missing or set to "dev-secret" in production. Refusing to start.');
+    process.exit(1);
+  } else {
+    console.warn(`[WARN] JWT_SECRET is ${!process.env.JWT_SECRET ? 'not set' : '"dev-secret"'} — using insecure fallback (dev only).`);
+  }
+}
+if (!process.env.DATABASE_URL) {
+  console.error('[FATAL] DATABASE_URL missing. Refusing to start.');
+  process.exit(1);
 }
 
 const PORT = process.env.PORT || 3000;
@@ -331,6 +377,17 @@ initDatabase().then(() => {
       console.warn('[jobs] failed to start:', e?.message),
     );
   });
+});
+
+// Global error handlers — keep the process alive through transient failures.
+// A single unhandled error in a graphile-worker task or Prisma call should NOT
+// crash the API server + disconnect all live socket sessions.
+process.on('unhandledRejection', (reason: any) => {
+  console.error('[unhandledRejection]', reason?.stack || reason?.message || reason);
+});
+process.on('uncaughtException', (err: any) => {
+  console.error('[uncaughtException]', err?.stack || err?.message || err);
+  // Keep running — if it was fatal, the kernel will OOM us or Railway will health-fail
 });
 
 // Graceful shutdown — flush telemetry + stop workers

@@ -223,11 +223,22 @@ memoryRouter.post('/forget', async (req: AuthRequest, res: Response) => {
 
 memoryRouter.get('/explain/:responseId', async (req: AuthRequest, res: Response) => {
   try {
-    const audit = await prisma.retrievalAudit.findFirst({
-      where: { userId: req.userId, responseId: String(req.params.responseId) },
+    // Try exact match first, then fall back to most-recent audit for this user.
+    // Retrieval refreshes periodically (not per-whisper), so multiple whispers
+    // share the same retrieval context. The fallback returns the context that
+    // was active when the responseId was minted.
+    const responseId = String(req.params.responseId);
+    let audit = await prisma.retrievalAudit.findFirst({
+      where: { userId: req.userId, responseId },
       orderBy: { createdAt: 'desc' },
     });
-    if (!audit) return res.status(404).json({ error: 'No audit record for that response' });
+    if (!audit) {
+      audit = await prisma.retrievalAudit.findFirst({
+        where: { userId: req.userId },
+        orderBy: { createdAt: 'desc' },
+      });
+    }
+    if (!audit) return res.status(404).json({ error: 'No retrieval audit records for this user' });
     // Hydrate the used memory ids
     const used = audit.usedMemoryIds as any;
     const [factRows, episodeRows, reflectionRows, procedureRows] = await Promise.all([

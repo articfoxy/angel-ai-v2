@@ -248,7 +248,8 @@ export class FactsService {
     const oldFact = await prisma.fact.findFirst({ where: { id: oldFactId, userId } });
     if (!oldFact) return null;
 
-    // Insert the new fact first
+    // Insert the new fact (needs embedding → separate raw SQL; Prisma interactive
+    // transactions don't play well with $executeRawUnsafe on pgvector columns).
     const newId = await this.add(
       {
         ...newFactInput,
@@ -260,15 +261,26 @@ export class FactsService {
     );
     if (!newId) return null;
 
-    // Close the old fact
-    await prisma.fact.update({
-      where: { id: oldFactId },
-      data: {
-        status: 'superseded',
-        validTo: new Date(),
-        supersededBy: newId,
-      },
-    });
+    // Close the old fact. If this fails, roll back the new fact so both don't
+    // end up active (which would poison retrieval with contradictory facts).
+    try {
+      await prisma.fact.update({
+        where: { id: oldFactId },
+        data: {
+          status: 'superseded',
+          validTo: new Date(),
+          supersededBy: newId,
+        },
+      });
+    } catch (err: any) {
+      console.error('[facts] supersede close-old failed, rolling back new fact:', err?.message);
+      try {
+        await prisma.fact.delete({ where: { id: newId } });
+      } catch (rollbackErr: any) {
+        console.error('[facts] rollback also failed — both facts now exist. Manual cleanup required.', rollbackErr?.message);
+      }
+      return null;
+    }
 
     logMemoryOp({
       userId, actorType: actor, operation: 'supersede', memoryType: 'fact', memoryId: oldFactId,
