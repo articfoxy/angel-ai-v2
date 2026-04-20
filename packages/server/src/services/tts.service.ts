@@ -43,6 +43,7 @@ export class CartesiaTTSService {
   private reconnectAttempts = 0;
   private intentionallyClosed = false;
   private queue: { whisperId: string; text: string }[] = [];
+  private keepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(config: CartesiaTTSConfig) {
     this.apiKey = config.apiKey;
@@ -101,6 +102,15 @@ export class CartesiaTTSService {
         this.connected = true;
         this.reconnectAttempts = 0;
         console.log('[TTS] WebSocket connected');
+        // Keep-alive: Cartesia closes idle connections after ~60s. A long Claude
+        // Code task (no TTS for 60+s) would kill the connection silently.
+        // WebSocket-level ping every 25s keeps it alive.
+        if (this.keepAliveTimer) clearInterval(this.keepAliveTimer);
+        this.keepAliveTimer = setInterval(() => {
+          if (this.ws?.readyState === WebSocket.OPEN) {
+            try { this.ws.ping(); } catch {}
+          }
+        }, 25_000);
         resolve();
       });
 
@@ -122,6 +132,7 @@ export class CartesiaTTSService {
       this.ws.on('close', (code, reason) => {
         clearTimeout(timeout);
         this.connected = false;
+        if (this.keepAliveTimer) { clearInterval(this.keepAliveTimer); this.keepAliveTimer = null; }
         console.log(`[TTS] Connection closed: ${code} ${reason}`);
 
         if (!this.intentionallyClosed) {
@@ -137,8 +148,13 @@ export class CartesiaTTSService {
    */
   speak(whisperId: string, text: string): void {
     if (!text || text.trim().length < MIN_TEXT_LENGTH) return;
+
     if (!this.isConnected) {
-      console.warn('[TTS] speak() called but WebSocket not connected');
+      // WebSocket idled out (common during long Claude Code tasks).
+      // Queue the text and kick off a reconnect — drain queue when connected.
+      console.warn(`[TTS] speak() while disconnected — queueing whisper=${whisperId} and reconnecting`);
+      this.queue.push({ whisperId, text });
+      this.reconnectAndDrain();
       return;
     }
 
@@ -150,6 +166,21 @@ export class CartesiaTTSService {
     }
 
     this.startSpeak(whisperId, text);
+  }
+
+  /** Trigger a reconnect outside the normal retry ladder and drain queue after. */
+  private async reconnectAndDrain(): Promise<void> {
+    if (this.intentionallyClosed) return;
+    try {
+      await this.connect(true);
+      // On open, drain any queued speech
+      if (this.queue.length > 0 && !this.currentWhisperId) {
+        const next = this.queue.shift()!;
+        this.startSpeak(next.whisperId, next.text);
+      }
+    } catch (err) {
+      console.error('[TTS] on-demand reconnect failed:', (err as any)?.message);
+    }
   }
 
   /** Internal: actually start speaking (no queue check). */
@@ -233,6 +264,7 @@ export class CartesiaTTSService {
     this.currentWhisperId = null;
     this.connected = false;
     this.queue = [];
+    if (this.keepAliveTimer) { clearInterval(this.keepAliveTimer); this.keepAliveTimer = null; }
 
     if (this.ws) {
       try {
