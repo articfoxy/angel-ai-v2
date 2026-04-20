@@ -77,6 +77,12 @@ const THRESHOLD_FRENETIC = 140;
 const STATE = new Map<string, Sample[]>(); // keyed by userId
 const LAST_TEMPO = new Map<string, Tempo>(); // for tempo-change logging
 
+// Soft cap so extremely long server uptime with many users doesn't leak the
+// maps unboundedly if some sessions never hit cleanupSession() (crash, panic).
+// 10k is ~200kb of memory and well above realistic concurrent-user counts.
+const MAX_TRACKED_USERS = 10_000;
+const EVICTION_SWEEP_AT = 11_000; // evict the oldest 1000 entries when we cross this
+
 export class TempoService {
   /** Record one final transcript's word count. Call on every Deepgram final. */
   record(userId: string, wordCount: number): void {
@@ -87,6 +93,7 @@ export class TempoService {
     // Trim to window on every write so the array can't grow unbounded
     const fresh = samples.filter((s) => now - s.ts <= WINDOW_MS);
     STATE.set(userId, fresh);
+    if (STATE.size > EVICTION_SWEEP_AT) this.sweepOldest(EVICTION_SWEEP_AT - MAX_TRACKED_USERS);
   }
 
   /** Words per minute over the last 60s. 0 if no samples. */
@@ -131,6 +138,23 @@ export class TempoService {
   reset(userId: string): void {
     STATE.delete(userId);
     LAST_TEMPO.delete(userId);
+  }
+
+  /** LRU-ish eviction: drop the oldest N user entries (by last sample ts).
+   *  Called when the map exceeds the soft cap — defends against the edge
+   *  case where cleanupSession never fires (process panic, crash). */
+  private sweepOldest(n: number): void {
+    const entries: Array<{ uid: string; lastTs: number }> = [];
+    for (const [uid, samples] of STATE) {
+      const last = samples.length > 0 ? samples[samples.length - 1].ts : 0;
+      entries.push({ uid, lastTs: last });
+    }
+    entries.sort((a, b) => a.lastTs - b.lastTs);
+    for (let i = 0; i < Math.min(n, entries.length); i++) {
+      STATE.delete(entries[i].uid);
+      LAST_TEMPO.delete(entries[i].uid);
+    }
+    console.log(`[tempo] swept ${n} stale user entries (cap ${MAX_TRACKED_USERS})`);
   }
 }
 

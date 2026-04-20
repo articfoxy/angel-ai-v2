@@ -771,8 +771,16 @@ export function setupSocketHandlers(io: Server) {
             // Adaptive cadence — record each final transcript's word count into
             // TempoService. Every proactive loop reads current tempo to pick its
             // cadence, so this one write feeds judge/heartbeat/passive/prefetch.
+            // CJK (Chinese/Japanese/Korean) and Arabic don't delimit words with
+            // whitespace — a 50-char Mandarin sentence would otherwise count as
+            // one "word". Sum the two signals so both Latin and CJK tempos read
+            // correctly.
             if (socket.userId) {
-              const words = data.text.trim().split(/\s+/).filter(Boolean).length;
+              const text = data.text.trim();
+              const spaceWords = text.split(/\s+/).filter(Boolean).length;
+              const cjkChars = (text.match(/[\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af]/g) || []).length;
+              // Take the max so we never double-count a mixed sentence
+              const words = Math.max(spaceWords, cjkChars);
               tempoService.record(socket.userId, words);
             }
 

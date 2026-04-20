@@ -4,6 +4,7 @@
  * Mirrors the RealtimeService interface but uses Claude Messages API
  * with local conversation history management.
  */
+import { tempoService } from './tempo.service';
 
 const CLAUDE_MODEL = process.env.CLAUDE_CODE_MODEL || 'claude-opus-4-20250514';
 const MAX_HISTORY = 50;
@@ -90,14 +91,15 @@ export class ClaudeCodeBrain {
     this.userId = config.userId;
   }
 
-  /** Adaptive threshold — reads TempoService for the current line count, falls
-   *  back to 2 if no user is attached (legacy path). */
+  /** Adaptive threshold — mirrors RealtimeService's blend logic: take the
+   *  stricter (higher) of code-mode's baseline (2) and the current tempo
+   *  line count. Ensures code mode never dips below a 2-line floor even in
+   *  slow conversations. Falls back to 2 if no user is attached. */
   private get triggerThreshold(): number {
-    if (!this.userId) return 2;
-    // Lazy import to avoid a circular dep at module load
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { tempoService } = require('./tempo.service');
-    return tempoService.getConfig(this.userId).realtimeTriggerLines as number;
+    const baseline = 2; // code-mode baseline matches RealtimeService
+    if (!this.userId) return baseline;
+    const tempoLines = tempoService.getConfig(this.userId).realtimeTriggerLines;
+    return Math.max(baseline, tempoLines);
   }
 
   get isConnected(): boolean { return this._isConnected; }
@@ -110,7 +112,11 @@ export class ClaudeCodeBrain {
     console.log(`[ClaudeBrain] Ready with model ${CLAUDE_MODEL}`);
   }
 
-  /** Feed a transcript line. Auto-triggers at threshold. */
+  /** Feed a transcript line. Auto-triggers at threshold UNLESS we're in
+   *  code mode — in code mode, user must press "Ask" or type a message to
+   *  invoke Claude (prevents burning API calls on idle chatter and accidental
+   *  Claude Code dispatches). Socket.service already skips feedTranscript in
+   *  code mode today; this guard is defence in depth if that ever changes. */
   feedTranscript(line: string): void {
     if (!this._isConnected) return;
 
@@ -124,6 +130,8 @@ export class ClaudeCodeBrain {
     if (this.messages.length > MAX_HISTORY) this.messages = this.messages.slice(-MAX_HISTORY);
 
     this.linesSinceLastResponse++;
+    // Never auto-fire in code mode — see doc comment above.
+    if (this.config.mode === 'code') return;
     if (this.linesSinceLastResponse >= this.triggerThreshold && !this.responseInProgress) {
       this.triggerResponse();
     }

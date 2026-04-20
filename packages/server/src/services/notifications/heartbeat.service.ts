@@ -36,21 +36,39 @@ interface HeartbeatContext {
 // current tempo on the next hop (setInterval would lock in 3min forever).
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
+// Monotonic generation counter per key. Every start() captures its gen at
+// entry; every stop() bumps it. An in-flight tick compares its captured gen
+// to the current one — if they differ, the chain was killed, so bail instead
+// of installing a new timer. Closes the stop-during-tick race.
+const generations = new Map<string, number>();
+
 export class HeartbeatService {
-  /** Start heartbeat for a user's session. Idempotent. */
+  /** Start heartbeat for a user's session. Idempotent.
+   *
+   * Race note — `this.tick(ctx)` is async, so `stop()` can run between the
+   * guard check and the re-schedule. We prevent orphaned timers with a
+   * monotonic generation counter: each (key) pair has a generation id;
+   * stop() bumps it; the reschedule checks its captured generation still
+   * matches and only then installs the next setTimeout. */
   start(ctx: HeartbeatContext): void {
     const key = `${ctx.userId}:${ctx.sessionId || 'no-session'}`;
     if (timers.has(key)) return;
 
+    // Capture generation at start — if stop() bumps generations.set, this
+    // chain is dead and no reschedule will install a new handle.
+    const myGen = (generations.get(key) ?? 0) + 1;
+    generations.set(key, myGen);
+
     const runTickAndReschedule = async () => {
-      // If stop() was called between schedule and fire, bail
-      if (!timers.has(key)) return;
+      // Entry guard — was this chain killed while we were queued?
+      if (generations.get(key) !== myGen) return;
       try {
         await this.tick(ctx);
       } catch (err: any) {
         console.warn('[heartbeat] tick failed:', err?.message?.slice(0, 100));
       }
-      if (!timers.has(key)) return;
+      // Post-await guard — stop() may have fired while we awaited
+      if (generations.get(key) !== myGen) return;
       // Re-read tempo for the next gap — this is the adaptive hop
       const nextGapMs = tempoService.getConfig(ctx.userId).heartbeatMs;
       const handle = setTimeout(runTickAndReschedule, nextGapMs);
@@ -62,14 +80,15 @@ export class HeartbeatService {
     timers.set(key, initial);
   }
 
-  /** Stop the heartbeat for this session. */
+  /** Stop the heartbeat for this session. Bumps the generation so any
+   *  already-in-flight tick won't reschedule after it finishes. */
   stop(userId: string, sessionId: string | null): void {
     const key = `${userId}:${sessionId || 'no-session'}`;
     const handle = timers.get(key);
-    if (handle) {
-      clearTimeout(handle);
-      timers.delete(key);
-    }
+    if (handle) clearTimeout(handle);
+    timers.delete(key);
+    // Bump generation — invalidates any tick that's already mid-flight
+    generations.set(key, (generations.get(key) ?? 0) + 1);
   }
 
   private async tick(ctx: HeartbeatContext): Promise<void> {
