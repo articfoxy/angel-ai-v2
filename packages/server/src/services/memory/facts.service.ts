@@ -55,6 +55,7 @@ export interface FactRecord {
   sourceEpisodeIds: string[];
   sourceObservationIds: string[];
   tags: string[];
+  privacyClass: PrivacyClass;
   distance?: number;
 }
 
@@ -84,7 +85,7 @@ export class FactsService {
     const rows = await prisma.$queryRawUnsafe<any[]>(
       `SELECT id, content, predicate, "subjectName", "objectValue", confidence, importance, status,
               "validFrom", "validTo", "freshnessAt", "supersededBy",
-              "sourceEpisodeIds", "sourceObservationIds", tags,
+              "sourceEpisodeIds", "sourceObservationIds", tags, "privacyClass",
               embedding <=> $1::vector AS distance
        FROM "Fact"
        WHERE "userId" = $2 AND "validTo" IS NULL AND status IN ('active','candidate') AND embedding IS NOT NULL
@@ -374,6 +375,7 @@ function rowToRecord(r: any): FactRecord {
     sourceEpisodeIds: r.sourceEpisodeIds ?? [],
     sourceObservationIds: r.sourceObservationIds ?? [],
     tags: r.tags ?? [],
+    privacyClass: (r.privacyClass as PrivacyClass) || 'public',
     distance: r.distance,
   };
 }

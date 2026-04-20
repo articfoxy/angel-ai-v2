@@ -181,6 +181,15 @@ class CodeWorkerHub {
       }));
       task.status = 'running';
       console.log(`[CodeWorker] Task ${task.taskId} dispatched to ${worker.name}`);
+      // Task TTL — if worker hangs silently (Claude CLI stuck, no response in 10min),
+      // force-fail the task so callbacks fire and memory doesn't leak.
+      setTimeout(() => {
+        const stillActive = this.tasks.get(task.taskId);
+        if (stillActive && stillActive.status === 'running') {
+          console.warn(`[CodeWorker] Task ${task.taskId} timed out (10min) — force-failing`);
+          this.handleError(worker!.id, task.taskId, 'Task timed out after 10 minutes with no response');
+        }
+      }, 10 * 60_000).unref();
     } catch (err) {
       task.status = 'failed';
       task.result = 'Failed to send to worker';

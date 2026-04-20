@@ -156,6 +156,10 @@ export class ClaudeCodeBrain {
   async close(): Promise<void> {
     this.abortCurrentRequest();
     this.clearSafetyTimeout();
+    // Bump generation so any late response from an in-flight callAPI
+    // (that we couldn't abort because fetch already completed) is ignored
+    // by finishRequest + follow-up tool-result gen checks.
+    this.requestGeneration++;
     this._isConnected = false;
     this.messages = [];
     this.linesSinceLastResponse = 0;

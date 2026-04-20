@@ -236,6 +236,9 @@ export function StartScreen() {
       if (testRetryRef.current) { clearTimeout(testRetryRef.current); testRetryRef.current = null; }
       setIsActive(false);
       setAngelThinking(false);
+      setCodeTaskStatus(null);
+      setCodeTaskDetail('');
+      codeTaskBusyRef.current = false;
       setAiStatus(null);
       setSessionId(null);
       setSegments([]);
@@ -298,6 +301,9 @@ export function StartScreen() {
       if (testRetryRef.current) { clearTimeout(testRetryRef.current); testRetryRef.current = null; }
       setIsActive(false);
       setAngelThinking(false);
+      setCodeTaskStatus(null);
+      setCodeTaskDetail('');
+      codeTaskBusyRef.current = false;
       setAiStatus(null);
       setSessionId(null);
       setSegments([]);
@@ -545,6 +551,8 @@ export function StartScreen() {
     sock.emit('angel:stop');
     // Clear local state optimistically; server will confirm via events
     setAngelThinking(false);
+    setCodeTaskStatus(null);
+    setCodeTaskDetail('');
     codeTaskBusyRef.current = false;
   }, []);
 

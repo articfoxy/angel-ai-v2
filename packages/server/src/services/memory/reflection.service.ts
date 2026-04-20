@@ -241,18 +241,37 @@ export class CompactionService {
       data: { status: 'expired', validTo: new Date() },
     });
 
-    // Archive observations older than 30d once they've been processed
-    // (they live on only via episode.sourceObservationIds references)
-    const obsArchived = await prisma.observation.deleteMany({
+    // Archive observations older than 30d once they've been processed.
+    // Before hard-deleting, collect ids so we can scrub dangling provenance
+    // references on Facts + Episodes that point back to them.
+    const toArchive = await prisma.observation.findMany({
       where: {
         userId,
         processed: true,
         observedAt: { lt: thirtyDaysAgo },
-        privacyClass: { not: 'regulated' }, // regulated content has its own retention rules
+        privacyClass: { not: 'regulated' },
       },
+      select: { id: true },
+      take: 1000, // cap per cycle to avoid big deletes
     });
+    let obsCount = 0;
+    if (toArchive.length > 0) {
+      const ids = toArchive.map((o) => o.id);
+      const res = await prisma.observation.deleteMany({ where: { id: { in: ids } } });
+      obsCount = res.count;
+      for (const obsId of ids) {
+        await prisma.$executeRawUnsafe(
+          `UPDATE "Fact" SET "sourceObservationIds" = array_remove("sourceObservationIds", $1) WHERE "userId" = $2 AND $1 = ANY("sourceObservationIds")`,
+          obsId, userId,
+        ).catch(() => {});
+        await prisma.$executeRawUnsafe(
+          `UPDATE "Episode" SET "sourceObservationIds" = array_remove("sourceObservationIds", $1) WHERE "userId" = $2 AND $1 = ANY("sourceObservationIds")`,
+          obsId, userId,
+        ).catch(() => {});
+      }
+    }
 
-    return { factsExpired: factsExpired.count, obsArchived: obsArchived.count };
+    return { factsExpired: factsExpired.count, obsArchived: obsCount };
   }
 
   /** Merge near-duplicate candidate facts via semantic clustering. */
@@ -287,6 +306,30 @@ export class CompactionService {
         await prisma.fact.update({
           where: { id: c.id },
           data: { status: 'active', confidence: Math.max(c.confidence, 0.8) },
+        });
+        promoted++;
+      }
+    }
+    return promoted;
+  }
+
+  /** Promote procedure candidates that have accrued success evidence. */
+  async promoteProcedures(userId: string): Promise<number> {
+    const candidates = await prisma.procedure.findMany({
+      where: { userId, status: 'candidate' },
+      take: 50,
+    });
+    let promoted = 0;
+    for (const p of candidates) {
+      // Promote when the procedure has been useful (success > failure + floor)
+      // OR has matured (>7 days old and no failures)
+      const age = Date.now() - new Date(p.createdAt).getTime();
+      const matured = age > 7 * 24 * 3_600_000 && p.failureCount === 0;
+      const useful = p.successCount >= 3 && p.successCount > p.failureCount;
+      if (useful || matured) {
+        await prisma.procedure.update({
+          where: { id: p.id },
+          data: { status: 'active', confidence: Math.max(p.confidence, 0.75) },
         });
         promoted++;
       }

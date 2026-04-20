@@ -322,24 +322,43 @@ async function initDatabase() {
     console.warn('[db] v2 migration skipped/failed:', err?.message?.slice(0, 200));
   }
 
-  // Run `prisma db push` from within Node so the v2 schema gets materialized
-  // even if start.sh didn't execute its commands. Safe: --accept-data-loss is
-  // needed because we just dropped old tables above, and it's idempotent on
-  // subsequent boots.
+  // Run `prisma db push` from within Node ONLY on initial v2 install (when we
+  // just dropped the old tables via the destructive migration above). After
+  // that marker is set, schema changes go through proper Prisma migrations.
+  // --accept-data-loss on every boot is too risky — any later schema change
+  // that drops a column would silently drop data in prod.
   try {
-    const { spawnSync } = await import('child_process');
-    const res = spawnSync('npx', ['prisma', 'db', 'push', '--skip-generate', '--accept-data-loss'], {
-      encoding: 'utf8',
-      timeout: 60_000,
-      env: process.env,
-    });
-    if (res.status === 0) {
-      console.log('[db] ✓ prisma db push applied v2 schema');
-    } else {
-      console.warn('[db] prisma db push non-zero exit:', res.status, (res.stdout || '').slice(0, 300), (res.stderr || '').slice(0, 300));
+    const markerAlreadySet = await prisma.$queryRawUnsafe<any[]>(
+      `SELECT 1 FROM pg_description
+       WHERE description = 'angel-memory-os-v2'
+         AND objoid = (SELECT oid FROM pg_namespace WHERE nspname = 'public')`,
+    );
+    const factTableExists = await prisma.$queryRawUnsafe<any[]>(
+      `SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'Fact'`,
+    );
+    if (markerAlreadySet.length > 0 && factTableExists.length === 0) {
+      // Marker set but tables not yet created — this is the first boot after
+      // the destructive migration. Materialize schema once with data-loss flag.
+      const { spawnSync } = await import('child_process');
+      const res = spawnSync('npx', ['prisma', 'db', 'push', '--skip-generate', '--accept-data-loss'], {
+        encoding: 'utf8',
+        timeout: 60_000,
+        env: process.env,
+      });
+      if (res.status === 0) console.log('[db] ✓ initial v2 schema materialized');
+      else console.warn('[db] initial db push exit=' + res.status + ': ' + (res.stderr || '').slice(0, 200));
+    } else if (markerAlreadySet.length === 0) {
+      // Fresh DB, no marker yet — run initial push WITHOUT --accept-data-loss
+      // (this is a fresh install, no data to lose)
+      const { spawnSync } = await import('child_process');
+      const res = spawnSync('npx', ['prisma', 'db', 'push', '--skip-generate'], {
+        encoding: 'utf8', timeout: 60_000, env: process.env,
+      });
+      if (res.status === 0) console.log('[db] ✓ schema applied to fresh DB');
     }
+    // Else: tables exist + marker set → schema already synced, no boot-time push
   } catch (err: any) {
-    console.warn('[db] prisma db push failed to spawn:', err?.message?.slice(0, 200));
+    console.warn('[db] schema sync failed:', err?.message?.slice(0, 200));
   }
 
   // HNSW vector indices on v2 memory tables — each wrapped individually so

@@ -28,27 +28,40 @@ export class PerplexityService {
       throw new Error('PERPLEXITY_API_KEY not set');
     }
 
-    const response = await fetch('https://api.perplexity.ai/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'sonar',
-        messages: [
-          {
-            role: 'system',
-            content: 'Be precise and concise. Provide factual information with sources.',
-          },
-          {
-            role: 'user',
-            content: query,
-          },
-        ],
-        max_tokens: 500,
-      }),
-    });
+    // 10s timeout — otherwise a slow Perplexity response hangs the whisper handler
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10_000);
+
+    let response: Response;
+    try {
+      response = await fetch('https://api.perplexity.ai/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'sonar',
+          messages: [
+            {
+              role: 'system',
+              content: 'Be precise and concise. Provide factual information with sources.',
+            },
+            {
+              role: 'user',
+              content: query,
+            },
+          ],
+          max_tokens: 500,
+        }),
+        signal: controller.signal,
+      });
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      if (err?.name === 'AbortError') throw new Error('Perplexity API timeout (10s)');
+      throw err;
+    }
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const body = await response.text().catch(() => '');

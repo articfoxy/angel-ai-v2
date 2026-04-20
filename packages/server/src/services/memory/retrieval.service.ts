@@ -133,10 +133,10 @@ export class RetrievalService {
       this.fetchReflections(userId, query, maxReflections * 2),
     ]);
 
-    // Score + filter by privacy
+    // Score + filter by privacy — per-fact privacyClass from the DB row
     const now = Date.now();
     const scoredFacts = factCandidates
-      .filter((f) => canRecall(privacyMode, 'public')) // privacy_class per fact checked below
+      .filter((f) => canRecall(privacyMode, f.privacyClass || 'public'))
       .map((f) => ({ item: f, score: scoreItem(f.distance ?? 1, f.freshnessAt, f.importance, 0, now) }))
       .sort((a, b) => b.score - a.score)
       .slice(0, maxFacts);

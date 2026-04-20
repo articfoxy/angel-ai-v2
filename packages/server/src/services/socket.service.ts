@@ -60,6 +60,7 @@ export function setupSocketHandlers(io: Server) {
     let liveDirectives: string[] = [];
     let sessionOpenaiKey = '';
     let sessionAnthropicKey = '';
+    let modeSwitchInFlight = false; // mutex to serialize concurrent switchMode calls
     let sessionOwnerLanguage = 'English';
     // Session config captured at start — needed to rebuild brain on mode switch
     let sessionMode: 'translation' | 'intelligence' | 'hybrid' | 'code' = 'intelligence';
@@ -126,11 +127,17 @@ export function setupSocketHandlers(io: Server) {
     async function switchMode(newMode: 'translation' | 'intelligence' | 'hybrid' | 'code'): Promise<boolean> {
       if (newMode === sessionMode) return false; // No-op
       if (!socket.userId) return false;
+      // Mutex: only one switchMode can execute at a time. Double-taps are dropped.
+      if (modeSwitchInFlight) {
+        console.warn('[mode-switch] already in flight, ignoring');
+        return false;
+      }
+      modeSwitchInFlight = true;
       const oldMode = sessionMode;
       console.log(`[mode-switch] ${oldMode} → ${newMode}`);
 
       const openaiKey = sessionOpenaiKey;
-      if (!openaiKey) { console.warn('[mode-switch] No OpenAI key'); return false; }
+      if (!openaiKey) { console.warn('[mode-switch] No OpenAI key'); modeSwitchInFlight = false; return false; }
 
       // Tear down the current brain
       if (realtime) {
@@ -183,6 +190,7 @@ export function setupSocketHandlers(io: Server) {
       } catch (err) {
         console.error('[mode-switch] connect failed:', err);
         realtime = null;
+        modeSwitchInFlight = false;
         return false;
       }
 
@@ -220,6 +228,7 @@ export function setupSocketHandlers(io: Server) {
         content: `🎛️ Switched to ${newMode.charAt(0).toUpperCase() + newMode.slice(1)} mode`,
         createdAt: new Date().toISOString(),
       });
+      modeSwitchInFlight = false;
       return true;
     }
 

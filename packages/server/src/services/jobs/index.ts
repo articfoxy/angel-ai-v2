@@ -162,9 +162,32 @@ const tasks: Record<string, Task> = {
           helpers.logger.warn(`raw-asset purge ${contentRef}: ${err?.message?.slice(0, 80)}`);
         }
       }
-      // Now hard-delete the observations themselves
+      // Collect deleted observation IDs BEFORE hard-deleting so we can scrub
+      // provenance arrays afterward
+      const toDelete = await prisma.observation.findMany({
+        where: obsWhere,
+        select: { id: true },
+      });
+      const deletedIds = toDelete.map((o) => o.id);
+
+      // Hard-delete the observations
       const res = await prisma.observation.deleteMany({ where: obsWhere });
       count += res.count;
+
+      // Scrub now-dangling sourceObservationIds references in Facts + Episodes.
+      // Postgres array_remove cleanly filters out the deleted ids per row.
+      if (deletedIds.length > 0) {
+        for (const obsId of deletedIds) {
+          await prisma.$executeRawUnsafe(
+            `UPDATE "Fact" SET "sourceObservationIds" = array_remove("sourceObservationIds", $1) WHERE "userId" = $2 AND $1 = ANY("sourceObservationIds")`,
+            obsId, userId,
+          ).catch(() => {});
+          await prisma.$executeRawUnsafe(
+            `UPDATE "Episode" SET "sourceObservationIds" = array_remove("sourceObservationIds", $1) WHERE "userId" = $2 AND $1 = ANY("sourceObservationIds")`,
+            obsId, userId,
+          ).catch(() => {});
+        }
+      }
     }
 
     // 3. Audit trail — record the forget operation (outlives the data)
@@ -215,7 +238,10 @@ const tasks: Record<string, Task> = {
     try {
       const promoted = await c.promoteCandidates(userId);
       const merged = await c.mergeDuplicateFacts(userId);
-      if (promoted || merged) helpers.logger.info(`compact user=${userId.slice(0, 8)}: promoted ${promoted}, merged ${merged}`);
+      const promotedProcs = await c.promoteProcedures(userId);
+      if (promoted || merged || promotedProcs) {
+        helpers.logger.info(`compact user=${userId.slice(0, 8)}: facts +${promoted}/~${merged}, procs +${promotedProcs}`);
+      }
     } catch (e: any) { helpers.logger.warn(`compact user=${userId.slice(0, 8)}: ${e?.message?.slice(0, 80)}`); }
   },
 

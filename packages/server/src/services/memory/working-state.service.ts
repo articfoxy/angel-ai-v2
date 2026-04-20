@@ -123,9 +123,14 @@ export class WorkingStateService {
     return `<working_state>\n${lines.join('\n')}\n</working_state>`;
   }
 
-  /** Clear all working state for a session (called on session end). */
+  /** Clear all working state for a session (called on session end).
+   *  Also purges NO_SESSION-scoped rows for this user so orphaned
+   *  session-less state doesn't leak into the next session.
+   *  TTL sweep handles long-lived NO_SESSION rows otherwise. */
   async clearSession(userId: string, sessionId: string): Promise<void> {
-    await prisma.workingState.deleteMany({ where: { userId, sessionId } });
+    await prisma.workingState.deleteMany({
+      where: { userId, sessionId: { in: [sessionId, NO_SESSION] } },
+    });
   }
 
   /** TTL sweep — called from the retention job. */

@@ -150,9 +150,13 @@ export class MemoryJudgeService {
     // concurrent judge runs (periodic + session_end) cannot pick up the same
     // batch. Any later observations arrive as processed=false and are claimed
     // by the next run.
+    //
+    // LIMIT dynamically — stop before exceeding ~60k chars of content to keep
+    // the LLM input within gpt-4o-mini's 128k context window after prompt overhead.
     const claimed: Array<{
       id: string; observedAt: Date; modality: string; source: string;
       speaker: string | null; content: string; importance: number; payload: any;
+      privacyClass: string;
     }> = await prisma.$queryRawUnsafe(
       `UPDATE "Observation"
        SET processed = true
@@ -161,10 +165,10 @@ export class MemoryJudgeService {
          WHERE "userId" = $1 AND processed = false
            ${sessionId ? `AND "sessionId" = $2` : ''}
          ORDER BY "observedAt" ASC
-         LIMIT 100
+         LIMIT 50
          FOR UPDATE SKIP LOCKED
        )
-       RETURNING id, "observedAt", modality, source, speaker, content, importance, payload`,
+       RETURNING id, "observedAt", modality, source, speaker, content, importance, payload, "privacyClass"`,
       ...[userId, ...(sessionId ? [sessionId] : [])],
     );
 
@@ -172,6 +176,15 @@ export class MemoryJudgeService {
       return { observationsProcessed: 0, episodeCreated: null, factsAdded: 0, factsUpdated: 0, factsSuperseded: 0, proceduresProposed: 0 };
     }
     const observations = claimed;
+
+    // STRICTEST privacy class of the batch — facts derived from ANY sensitive
+    // observation inherit that class, so they don't leak into prompts via
+    // public-by-default retrieval.
+    const rank: Record<string, number> = { public: 0, private: 1, sensitive: 2, regulated: 3, do_not_store: 4 };
+    const batchPrivacyClass = observations.reduce(
+      (max: string, o: any) => (rank[o.privacyClass] > rank[max] ? o.privacyClass : max),
+      'public',
+    ) as any;
 
     // Context for the judge
     const [recentEpisodes, coreBlockText, workingStateText] = await Promise.all([
@@ -242,6 +255,8 @@ export class MemoryJudgeService {
 
         if (op.op === 'ADD') {
           if (!op.subject_name || !op.predicate || op.object_value === undefined || !op.content) continue;
+          // Dangerous predicate / subject guard — prompt-injection defense
+          if (isForbiddenFactShape(op)) { continue; }
           const id = await this.facts.add({
             userId,
             namespace: op.namespace ?? 'general',
@@ -256,6 +271,7 @@ export class MemoryJudgeService {
             sourceEpisodeIds: episodeCreated ? [episodeCreated] : [],
             sourceObservationIds: observations.map((o) => o.id),
             tags: op.tags,
+            privacyClass: batchPrivacyClass,
           }, privacyMode);
           if (id) factsAdded++;
         } else if (op.op === 'UPDATE') {
@@ -272,6 +288,7 @@ export class MemoryJudgeService {
           if (ok) factsUpdated++;
         } else if (op.op === 'SUPERSEDE') {
           if (!op.fact_id || !op.subject_name || !op.predicate || op.object_value === undefined || !op.content) continue;
+          if (isForbiddenFactShape(op)) { continue; }
           const newId = await this.facts.supersede(userId, op.fact_id, {
             userId,
             namespace: op.namespace ?? 'general',
@@ -286,6 +303,7 @@ export class MemoryJudgeService {
             sourceEpisodeIds: episodeCreated ? [episodeCreated] : [],
             sourceObservationIds: observations.map((o) => o.id),
             tags: op.tags,
+            privacyClass: batchPrivacyClass,
           }, privacyMode);
           if (newId) factsSuperseded++;
         }
@@ -346,9 +364,19 @@ export class MemoryJudgeService {
     similarFacts: FactRecord[];
     trigger: JudgeTriggerReason;
   }): Promise<JudgeOutput> {
-    const observationsText = ctx.observations
-      .map((o, i) => `[obs#${i} ${o.modality} ${new Date(o.observedAt).toISOString()}] ${o.speaker || o.source}: ${o.content}`)
-      .join('\n');
+    // Truncate observations so total content stays well under model context window.
+    // gpt-4o-mini has 128k input tokens ≈ 512k chars. Keep observations under 60k
+    // to leave headroom for system prompt, similar_facts, and episodes.
+    const MAX_OBS_CHARS = 60_000;
+    let totalChars = 0;
+    const obsForPrompt: any[] = [];
+    for (const o of ctx.observations) {
+      const line = `[obs#${obsForPrompt.length} ${o.modality}] ${o.speaker || o.source}: ${String(o.content).slice(0, 800)}`;
+      if (totalChars + line.length > MAX_OBS_CHARS) break;
+      totalChars += line.length;
+      obsForPrompt.push({ ...o, _line: line });
+    }
+    const observationsText = obsForPrompt.map((o) => o._line).join('\n');
 
     const similarFactsText = ctx.similarFacts.length > 0
       ? ctx.similarFacts.map((f) => `[fact_id=${f.id} conf=${f.confidence.toFixed(2)} status=${f.status}] ${f.content}`).join('\n')
@@ -438,4 +466,21 @@ Now produce the JSON output.`;
       return {};
     }
   }
+}
+
+/**
+ * Guard against prompt-injection-crafted fact ops. A bystander or adversarial
+ * transcript could try to inject facts that the brain then reads back as
+ * system state. Block obvious escalation attempts.
+ */
+function isForbiddenFactShape(op: JudgeFactOp): boolean {
+  const subj = (op.subject_name || '').toLowerCase();
+  const pred = (op.predicate || '').toLowerCase();
+  const subjType = (op.subject_type || '').toLowerCase();
+  // Reject facts positioning the system/assistant as subject
+  if (['system', 'angel', 'assistant', 'admin', 'root'].includes(subj)) return true;
+  if (['system', 'admin'].includes(subjType)) return true;
+  // Reject auth/permission-shaped predicates
+  if (/\b(admin|auth|sudo|role|permission|password|token|credential|api.?key)\b/.test(pred)) return true;
+  return false;
 }
