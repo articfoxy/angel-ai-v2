@@ -25,6 +25,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { TranscriptView } from '../components/TranscriptView';
+import { IntentChips, type ActiveIntent } from '../components/IntentChips';
 import { useAuth } from '../hooks/useAuth';
 import { connectSocket, disconnectSocket, getSocket, onSocketStateChange } from '../services/socket';
 import { requestMicPermission, startRecording, stopRecording, setGain, getGain, setMicSource, setOutputDevice } from '../services/audio';
@@ -50,6 +51,7 @@ const SESSION_EVENTS = [
   'tts:done',
   'tts:cancel',
   'realtime:status',
+  'intents:update',
 ] as const;
 
 type AngelMode = 'translation' | 'intelligence' | 'hybrid' | 'code';
@@ -118,6 +120,7 @@ export function StartScreen() {
   const [liveDirective, setLiveDirective] = useState('');
   const [directiveFocused, setDirectiveFocused] = useState(false);
   const [ttsSpeed, setTtsSpeed] = useState<'normal' | 'fast' | 'fastest' | 'ultra'>('normal');
+  const [activeIntents, setActiveIntents] = useState<ActiveIntent[]>([]);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const testRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isStartingRef = useRef(false); // Double-tap guard for session creation
@@ -342,6 +345,11 @@ export function StartScreen() {
     sock.on('realtime:status', (data: { status: string }) => {
       setAiStatus(data.status);
     });
+
+    // Phase D — active behavioral intents (replaces hard mode selector)
+    sock.on('intents:update', (data: { intents: ActiveIntent[] }) => {
+      setActiveIntents(Array.isArray(data?.intents) ? data.intents : []);
+    });
   }, [cleanupSessionListeners, refetchSessions]);
 
   // Subscribe to socket connection state changes
@@ -418,6 +426,15 @@ export function StartScreen() {
     startSession({ startRecordingAfter: false }).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
+
+  const dismissIntent = useCallback((intentId: string) => {
+    const sock = getSocket();
+    // Optimistic — remove locally, server will re-broadcast to confirm
+    setActiveIntents((prev) => prev.filter((i) => i.id !== intentId));
+    if (sock?.connected) {
+      sock.emit('intents:dismiss', { id: intentId });
+    }
+  }, []);
 
   const selectMode = useCallback((mode: AngelMode) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -782,6 +799,10 @@ export function StartScreen() {
           })}
         </View>
       </View>
+
+      {/* Phase D — Active behavioral intents. Render only when non-empty so it
+           doesn't push other UI around. Tap to dismiss. */}
+      <IntentChips intents={activeIntents} onDismiss={dismissIntent} />
 
       {/* Reconnecting banner */}
       {isReconnecting && isActive && (

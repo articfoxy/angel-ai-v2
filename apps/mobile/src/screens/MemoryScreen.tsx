@@ -27,13 +27,15 @@ import { Ionicons } from '@expo/vector-icons';
 import { api } from '../services/api';
 import { colors, spacing, fontSize, radius } from '../theme';
 
-type Tab = 'core' | 'facts' | 'episodes' | 'habits' | 'thoughts';
+type Tab = 'core' | 'facts' | 'episodes' | 'habits' | 'thoughts' | 'commitments' | 'goals';
 
 interface CoreBlock { id: string; label: string; value: string; version: number; readOnly: boolean; tokenCount: number; updatedAt: string }
 interface Fact { id: string; content: string; subjectName: string; predicate: string; confidence: number; importance: number; status: string; freshnessAt: string; createdAt: string; tags: string[]; accessCount: number }
 interface Episode { id: string; title: string; summary: string; timeStart: string; timeEnd: string; importance: number; confidence: number; status: string }
 interface Procedure { id: string; triggerSignature: string; policyText: string; category: string; confidence: number; status: string; successCount: number; failureCount: number; createdAt: string }
 interface Reflection { id: string; summary: string; themes: string[]; importance: number; confidence: number; timeWindowStart: string; timeWindowEnd: string; triggerKind: string; createdAt: string }
+interface Commitment { id: string; fromName: string; toName: string; description: string; dueDate: string | null; status: string; importance: number; confidence: number; createdAt: string; completedAt: string | null; contradictsIds: string[] }
+interface Goal { id: string; title: string; description: string | null; targetDate: string | null; progress: number; status: string; importance: number; mentionCount: number; lastMentionedAt: string | null; createdAt: string }
 
 type PrivacyMode = 'off' | 'standard' | 'private_meeting';
 
@@ -47,6 +49,8 @@ export function MemoryScreen() {
   const [episodes, setEpisodes] = useState<Episode[]>([]);
   const [procedures, setProcedures] = useState<Procedure[]>([]);
   const [reflections, setReflections] = useState<Reflection[]>([]);
+  const [commitments, setCommitments] = useState<Commitment[]>([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
   const [privacy, setPrivacy] = useState<PrivacyMode>('standard');
 
   const [editingBlock, setEditingBlock] = useState<string | null>(null);
@@ -54,12 +58,14 @@ export function MemoryScreen() {
 
   const loadAll = useCallback(async () => {
     try {
-      const [bRes, fRes, eRes, pRes, rRes, privRes] = await Promise.allSettled([
+      const [bRes, fRes, eRes, pRes, rRes, cRes, gRes, privRes] = await Promise.allSettled([
         api.get<CoreBlock[]>('memory/core'),
         api.get<Fact[]>('memory/facts?status=all'),
         api.get<Episode[]>('memory/episodes'),
         api.get<Procedure[]>('memory/procedures'),
         api.get<Reflection[]>('memory/reflections'),
+        api.get<Commitment[]>('memory/commitments'),
+        api.get<Goal[]>('memory/goals'),
         api.get<{ mode: PrivacyMode }>('memory/privacy'),
       ]);
       if (bRes.status === 'fulfilled') setBlocks(bRes.value || []);
@@ -67,6 +73,8 @@ export function MemoryScreen() {
       if (eRes.status === 'fulfilled') setEpisodes(eRes.value || []);
       if (pRes.status === 'fulfilled') setProcedures(pRes.value || []);
       if (rRes.status === 'fulfilled') setReflections(rRes.value || []);
+      if (cRes.status === 'fulfilled') setCommitments(cRes.value || []);
+      if (gRes.status === 'fulfilled') setGoals(gRes.value || []);
       if (privRes.status === 'fulfilled') setPrivacy(((privRes.value as any)?.mode as PrivacyMode) ?? 'standard');
     } catch {}
   }, []);
@@ -140,17 +148,25 @@ export function MemoryScreen() {
       {/* Tabs */}
       <View style={styles.tabsWrap}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.tabs}>
-          {(['core', 'facts', 'episodes', 'habits', 'thoughts'] as Tab[]).map((t) => (
-            <TouchableOpacity
-              key={t}
-              style={[styles.tab, activeTab === t && styles.tabActive]}
-              onPress={() => setActiveTab(t)}
-            >
-              <Text style={[styles.tabLabel, activeTab === t && styles.tabLabelActive]}>
-                {t === 'core' ? 'Core' : t === 'facts' ? `Facts (${facts.length})` : t === 'episodes' ? `Episodes (${episodes.length})` : t === 'habits' ? `Habits (${procedures.length})` : `Reflections (${reflections.length})`}
-              </Text>
-            </TouchableOpacity>
-          ))}
+          {(['core', 'commitments', 'goals', 'facts', 'episodes', 'habits', 'thoughts'] as Tab[]).map((t) => {
+            const label =
+              t === 'core' ? 'Core'
+              : t === 'commitments' ? `Commitments (${commitments.filter((c) => c.status === 'open').length})`
+              : t === 'goals' ? `Goals (${goals.filter((g) => g.status === 'active').length})`
+              : t === 'facts' ? `Facts (${facts.length})`
+              : t === 'episodes' ? `Episodes (${episodes.length})`
+              : t === 'habits' ? `Habits (${procedures.length})`
+              : `Reflections (${reflections.length})`;
+            return (
+              <TouchableOpacity
+                key={t}
+                style={[styles.tab, activeTab === t && styles.tabActive]}
+                onPress={() => setActiveTab(t)}
+              >
+                <Text style={[styles.tabLabel, activeTab === t && styles.tabLabelActive]}>{label}</Text>
+              </TouchableOpacity>
+            );
+          })}
         </ScrollView>
       </View>
 
@@ -309,6 +325,80 @@ export function MemoryScreen() {
                 <Text style={styles.factDetail}>
                   {new Date(r.timeWindowStart).toLocaleDateString()} → {new Date(r.timeWindowEnd).toLocaleDateString()}
                 </Text>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* ─── COMMITMENTS ─── */}
+        {activeTab === 'commitments' && (
+          <View style={{ gap: spacing.sm }}>
+            {commitments.length === 0 && <Text style={styles.empty}>No commitments yet. Angel tracks them from transcripts.</Text>}
+            {commitments.map((c) => {
+              const overdue = c.dueDate && new Date(c.dueDate).getTime() < Date.now() && c.status === 'open';
+              return (
+                <View key={c.id} style={styles.card}>
+                  <View style={styles.factMeta}>
+                    <View style={[styles.statusPill, c.status === 'open' ? (overdue ? styles.statusDeprecated : styles.statusActive) : styles.statusCandidate]}>
+                      <Text style={styles.statusText}>{overdue ? 'overdue' : c.status}</Text>
+                    </View>
+                    {c.dueDate && (
+                      <Text style={styles.factDetail}>
+                        due {new Date(c.dueDate).toLocaleDateString()}
+                      </Text>
+                    )}
+                    <View style={{ flex: 1 }} />
+                    {c.contradictsIds.length > 0 && (
+                      <Ionicons name="warning-outline" size={14} color={colors.warning} />
+                    )}
+                  </View>
+                  <Text style={styles.factContent}>{c.description}</Text>
+                  <Text style={styles.factDetail}>{c.fromName} → {c.toName}</Text>
+                  {c.status === 'open' && (
+                    <View style={styles.procActions}>
+                      <TouchableOpacity
+                        style={styles.approveBtn}
+                        onPress={async () => { await api.post(`memory/commitments/${c.id}/complete`, {}); await loadAll(); }}
+                      >
+                        <Ionicons name="checkmark" size={14} color={colors.success} />
+                        <Text style={styles.approveText}>Done</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.deprecateBtn}
+                        onPress={async () => { await api.post(`memory/commitments/${c.id}/cancel`, {}); await loadAll(); }}
+                      >
+                        <Ionicons name="close" size={14} color={colors.danger} />
+                        <Text style={styles.deprecateText}>Cancel</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </View>
+              );
+            })}
+          </View>
+        )}
+
+        {/* ─── GOALS ─── */}
+        {activeTab === 'goals' && (
+          <View style={{ gap: spacing.sm }}>
+            {goals.length === 0 && <Text style={styles.empty}>No goals yet. Angel tracks them passively from what you say.</Text>}
+            {goals.map((g) => (
+              <View key={g.id} style={styles.card}>
+                <View style={styles.factMeta}>
+                  <View style={[styles.statusPill, g.status === 'active' ? styles.statusActive : styles.statusCandidate]}>
+                    <Text style={styles.statusText}>{g.status}</Text>
+                  </View>
+                  <Text style={styles.factConfidence}>progress {(g.progress * 100).toFixed(0)}%</Text>
+                  <Text style={styles.factAccess}>×{g.mentionCount}</Text>
+                </View>
+                <Text style={styles.factContent}>{g.title}</Text>
+                {g.description && <Text style={styles.factDetail}>{g.description}</Text>}
+                {g.targetDate && (
+                  <Text style={styles.factDetail}>target {new Date(g.targetDate).toLocaleDateString()}</Text>
+                )}
+                {g.lastMentionedAt && (
+                  <Text style={styles.factDetail}>last mentioned {new Date(g.lastMentionedAt).toLocaleDateString()}</Text>
+                )}
               </View>
             ))}
           </View>

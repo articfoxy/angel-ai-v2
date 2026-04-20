@@ -39,6 +39,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (token) {
         const userData = await api.get<User>('auth/me');
         setUser(userData);
+        // Phase A: register device for push notifications — non-blocking.
+        // Fire-and-forget; failures shouldn't block auth.
+        import('../services/notifications')
+          .then((mod) => mod.setupPushNotifications())
+          .catch(() => {});
       }
     } catch {
       setUser(null);
@@ -47,14 +52,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const maybeRegisterPush = () => {
+    import('../services/notifications')
+      .then((mod) => mod.setupPushNotifications())
+      .catch(() => {});
+  };
+
   const login = useCallback(async (email: string, password: string) => {
     const userData = await authLogin(email, password);
     setUser(userData);
+    maybeRegisterPush();
   }, []);
 
   const register = useCallback(async (email: string, password: string, name: string) => {
     const userData = await authRegister(email, password, name);
     setUser(userData);
+    maybeRegisterPush();
   }, []);
 
   const loginWithApple = useCallback(
@@ -64,12 +77,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     ) => {
       const userData = await authLoginWithApple(identityToken, fullName);
       setUser(userData);
+      maybeRegisterPush();
     },
     []
   );
 
   const logout = useCallback(async () => {
     disconnectSocket();
+    try {
+      const mod = await import('../services/notifications');
+      await mod.disableNotifications();
+    } catch {}
     await authLogout();
     setUser(null);
   }, []);
