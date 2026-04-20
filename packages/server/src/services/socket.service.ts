@@ -86,6 +86,11 @@ export function setupSocketHandlers(io: Server) {
     let lastMemoryContext = ''; // Cached for atomic prompt rebuilds
     let transcriptsSinceMemoryRefresh = 0;
     const MEMORY_REFRESH_INTERVAL = 10;
+    // Entity prefetch cooldown — pgvector query burns an embedding call per run.
+    // Fire at most once every 12s per session, and only on multi-word utterances
+    // that look like they could contain a name.
+    let lastEntityPrefetchMs = 0;
+    const ENTITY_PREFETCH_COOLDOWN_MS = 12_000;
 
     /** Atomically rebuild the Realtime AI prompt from base + memory + directives.
      *  If rebuildBase=true (e.g. worker projects changed), regenerates the base
@@ -714,7 +719,22 @@ export function setupSocketHandlers(io: Server) {
           userId: socket.userId,
           sessionId,
           openaiKey,
+          // When an intent times out, rebuild the brain's prompt so the expired
+          // behavior stops steering responses.
+          onIntentsChanged: () => {
+            try { rebuildInstructions(); } catch {}
+          },
         });
+        // Push a session-scoped intent snapshot. The on-connect broadcast used
+        // sessionId=null because no session existed yet; now that we know the
+        // actual sessionId, re-broadcast so the client chip list reflects any
+        // intents stored under this session.
+        (async () => {
+          try {
+            const { intentStack } = await import('./intents/intent-stack.service');
+            await intentStack.broadcastNow(socket.userId!, sessionId);
+          } catch {}
+        })();
       }
 
       // Load voiceprint for owner identification (if enrolled)
@@ -799,6 +819,48 @@ export function setupSocketHandlers(io: Server) {
               }
             }
 
+            // Phase B: voice-triggered pre-brief. Same patterns as the text-input
+            // path (session:message) so the wow moment works hands-free: the user
+            // can just say "brief me on Sarah" or "about to call mom" mid-session.
+            if (label === 'Owner' && socket.userId) {
+              const trimmed = data.text.trim();
+              const briefVoice = trimmed.match(
+                /^(?:brief me(?:\s+on)?|about to (?:call|meet|hop on with|talk to)|hopping on with|prep(?:\s+me)?(?:\s+for)?|meeting with|calling)\s+(.+)$/i,
+              );
+              if (briefVoice) {
+                const entityNameVoice = briefVoice[1].trim().replace(/[.,!?]+$/, '').slice(0, 120);
+                const uidB = socket.userId;
+                (async () => {
+                  try {
+                    const { BriefComposer } = await import('./notifications/brief-composer.service');
+                    const { responseOrchestrator } = await import('./notifications/orchestrator.service');
+                    const composer = new BriefComposer(sessionAnthropicKey);
+                    const brief = await composer.compose({
+                      userId: uidB,
+                      entityName: entityNameVoice,
+                      reasonTrigger: 'phrase_detected',
+                    });
+                    if (brief) {
+                      await responseOrchestrator.propose({
+                        userId: uidB,
+                        kind: 'pre_brief',
+                        importance: 7,
+                        content: brief.summary,
+                        detail: `Brief for ${brief.entityName} · ${brief.citations.length} memories · ${brief.modelLatencyMs}ms`,
+                        data: {
+                          entityId: brief.entityId,
+                          entityName: brief.entityName,
+                          briefCitations: brief.citations,
+                        },
+                      });
+                    }
+                  } catch (err: any) {
+                    console.warn('[brief-on-voice] failed:', err?.message?.slice(0, 100));
+                  }
+                })();
+              }
+            }
+
             // Phase D: Intent parser — catch natural-language behavioral directives
             // like "translate Chinese for 30 min", "handle jargon in this meeting",
             // "don't interrupt for an hour". Cheap regex gate first.
@@ -861,21 +923,38 @@ export function setupSocketHandlers(io: Server) {
             // Phase C: Mid-sentence entity prefetch. When a known entity is
             // mentioned in a live transcript, pre-load its facts into working
             // state so the brain has instant context on the next turn.
-            // Fire-and-forget; doesn't block transcript flow.
-            if (socket.userId && data.text.length > 10) {
-              const uidCopy = socket.userId;
+            // Rate-gated: at most once every 12s, and only on multi-word
+            // utterances (single words = unlikely to be meaningful context).
+            // pgvector similarity requires a fresh OpenAI embedding per call.
+            const prefetchNow = Date.now();
+            const wordCount = data.text.trim().split(/\s+/).length;
+            const prefetchGatePassed =
+              socket.userId &&
+              data.text.length > 10 &&
+              wordCount >= 3 &&
+              prefetchNow - lastEntityPrefetchMs > ENTITY_PREFETCH_COOLDOWN_MS;
+            if (prefetchGatePassed) {
+              lastEntityPrefetchMs = prefetchNow;
+              const uidCopy = socket.userId!;
               const sidCopy = currentSessionId;
               (async () => {
                 try {
                   const { entityService } = await import('./memory/entity.service');
                   const { WorkingStateService } = await import('./memory/working-state.service');
                   const mentioned = await entityService.findSimilar(uidCopy, data.text, 3);
-                  // Only count close matches (distance < 0.3 ≈ clearly relevant)
-                  const hits = mentioned.filter((e: any) => (e.distance ?? 1) < 0.3);
+                  // Only count close matches (distance < 0.3 ≈ clearly relevant).
+                  // distance is now correctly preserved by findSimilar's return
+                  // shape (was silently stripped by toRecord before).
+                  const hits = mentioned.filter((e) => typeof e.distance === 'number' && e.distance < 0.3);
                   if (hits.length > 0) {
                     const ws = new WorkingStateService();
                     await ws.set(uidCopy, sidCopy, 'current_topic' as any, {
-                      entities: hits.map((e) => ({ id: e.id, name: e.canonicalName, type: e.entityType })),
+                      entities: hits.map((e) => ({
+                        id: e.id,
+                        name: e.canonicalName,
+                        type: e.entityType,
+                        distance: e.distance,
+                      })),
                       detectedFrom: data.text.slice(0, 120),
                     }, 10 * 60_000);
                   }

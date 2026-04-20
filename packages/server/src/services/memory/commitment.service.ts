@@ -91,16 +91,22 @@ export class CommitmentService {
     return true;
   }
 
-  /** Find commitments that might contradict a candidate commitment. */
+  /** Find commitments that might contradict a candidate commitment.
+   *  Matches on case-insensitive fromName/toName and ±3-day window. Callers
+   *  should further filter by description similarity; the DB returns candidates
+   *  rather than guaranteed conflicts. */
   async findContradicting(userId: string, candidate: CommitmentInput): Promise<CommitmentRecord[]> {
-    // Same from+to pair, overlapping time window, similar description
     const rows = await prisma.commitment.findMany({
       where: {
         userId,
         status: 'open',
-        fromName: candidate.fromName,
-        toName: candidate.toName,
-        // Within ±3 days of the candidate's due date if set
+        // Case-insensitive match. "user" must match "User"; "Alice" must match
+        // "alice". Prisma's `mode: 'insensitive'` does ILIKE under the hood.
+        fromName: { equals: candidate.fromName, mode: 'insensitive' },
+        toName: { equals: candidate.toName, mode: 'insensitive' },
+        // Without dueDate, we don't know the time boundary — return any open
+        // commitments in the same from/to pair so description similarity can
+        // adjudicate upstream.
         ...(candidate.dueDate
           ? {
               dueDate: {
@@ -112,7 +118,16 @@ export class CommitmentService {
       },
       take: 10,
     });
-    return rows.map(toRecord);
+
+    // Rank by description similarity so the best candidate is first.
+    const candidateDesc = normalizeDesc(candidate.description);
+    const ranked = rows
+      .map((r) => ({ row: r, score: descSimilarity(candidateDesc, normalizeDesc(r.description)) }))
+      .sort((a, b) => b.score - a.score)
+      // Filter out clearly unrelated commitments (different topic entirely).
+      // 0.25 keeps moderate overlap; tune if we see false negatives.
+      .filter((x) => x.score >= 0.25);
+    return ranked.map((x) => toRecord(x.row));
   }
 
   /** Open commitments due in the given window. */
@@ -159,6 +174,33 @@ function toRecord(r: any): CommitmentRecord {
     completedAt: r.completedAt,
     contradictsIds: r.contradictsIds ?? [],
   };
+}
+
+/** Normalize a commitment description for fuzzy comparison:
+ *  lowercase, strip punctuation, drop short stopwords. */
+const STOPWORDS = new Set([
+  'i', 'ill', 'will', 'the', 'a', 'an', 'to', 'and', 'or', 'for', 'with',
+  'of', 'on', 'at', 'in', 'by', 'this', 'that', 'it', 'is', 'be', 'am',
+  'you', 'me', 'my', 'your', 'so', 'then', 'but', 'if', 'when', 'as',
+]);
+
+function normalizeDesc(s: string): Set<string> {
+  const tokens = s
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length >= 3 && !STOPWORDS.has(t));
+  return new Set(tokens);
+}
+
+/** Jaccard similarity on normalized token sets. Cheap, no deps, good enough
+ *  for surfacing "did the user say the same thing twice?". */
+function descSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const t of a) if (b.has(t)) intersection++;
+  const union = a.size + b.size - intersection;
+  return union === 0 ? 0 : intersection / union;
 }
 
 export const commitmentService = new CommitmentService();

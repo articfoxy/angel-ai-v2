@@ -23,6 +23,10 @@ interface HeartbeatContext {
   userId: string;
   sessionId: string | null;
   openaiKey: string;
+  /** Called when the intent stack changes (expiration). The socket handler
+   *  uses this to re-render the brain's system prompt so the expired
+   *  intent stops influencing responses. Safe to be async. */
+  onIntentsChanged?: () => void;
 }
 
 const timers = new Map<string, ReturnType<typeof setInterval>>();
@@ -77,7 +81,9 @@ export class HeartbeatService {
   }
 
   /** Expire time-bound intents (e.g. "translate for 30 min"). Broadcasts
-   * the updated list so the client can drop chips in real time. */
+   * the updated list so the client can drop chips in real time, and asks
+   * the socket handler to rebuild the brain's system prompt so the expired
+   * intent stops steering responses. */
   private async expireIntents(ctx: HeartbeatContext): Promise<void> {
     try {
       const { intentStack } = await import('../intents/intent-stack.service');
@@ -95,6 +101,8 @@ export class HeartbeatService {
             }).catch(() => {});
           }
         }
+        // Drop the expired intent fragment from the live prompt
+        try { ctx.onIntentsChanged?.(); } catch {}
       }
     } catch {}
   }

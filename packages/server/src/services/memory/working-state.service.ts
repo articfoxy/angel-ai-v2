@@ -104,10 +104,19 @@ export class WorkingStateService {
     return out;
   }
 
+  /** Keys stored in WorkingState but rendered by a dedicated formatter elsewhere.
+   *  Excluded from the default <working_state> block to avoid double-injection
+   *  (LLM sees intents as both raw JSON here AND formatted <active_intents>). */
+  private static readonly KEYS_RENDERED_ELSEWHERE = new Set<string>([
+    'intent_stack',
+  ]);
+
   /** Render working state as a compact prompt block. */
   async renderForPrompt(userId: string, sessionId: string | null): Promise<string> {
     const state = await this.getAll(userId, sessionId);
-    const keys = Object.keys(state);
+    const keys = Object.keys(state).filter(
+      (k) => !WorkingStateService.KEYS_RENDERED_ELSEWHERE.has(k),
+    );
     if (keys.length === 0) return '';
     const lines: string[] = [];
     for (const k of keys) {

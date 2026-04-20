@@ -26,6 +26,8 @@ export interface EntityRecord {
   metadata: any;
   createdAt: Date;
   updatedAt: Date;
+  /** Only populated by findSimilar (pgvector cosine distance, 0 = identical). */
+  distance?: number;
 }
 
 export class EntityService {
@@ -113,7 +115,9 @@ export class EntityService {
     return row ? toRecord(row) : null;
   }
 
-  /** Semantic similarity search — for fuzzy matching across spellings/phrasings. */
+  /** Semantic similarity search — for fuzzy matching across spellings/phrasings.
+   *  Returned rows include a numeric `distance` (0 = identical, larger = less
+   *  similar). Callers typically filter on distance < 0.3 for "clearly the same". */
   async findSimilar(userId: string, query: string, k = 5): Promise<EntityRecord[]> {
     const vec = await this.embeddings.embed(query);
     if (!vec) {
@@ -122,7 +126,9 @@ export class EntityService {
         orderBy: { updatedAt: 'desc' },
         take: k,
       });
-      return rows.map(toRecord);
+      // No vector — no real distance signal. Return with distance=1 (never
+      // passes tight similarity filters), preserving the contract.
+      return rows.map((r) => ({ ...toRecord(r), distance: 1 }));
     }
     const vectorStr = this.embeddings.toSqlVector(vec);
     const rows = await prisma.$queryRawUnsafe<any[]>(
@@ -134,7 +140,13 @@ export class EntityService {
        LIMIT $3`,
       vectorStr, userId, k,
     );
-    return rows.map(toRecord);
+    return rows.map((r) => {
+      const rec = toRecord(r);
+      // distance comes back as number | string depending on pg driver coercion
+      const dist = r.distance != null ? Number(r.distance) : undefined;
+      rec.distance = Number.isFinite(dist) ? dist : undefined;
+      return rec;
+    });
   }
 
   /**
