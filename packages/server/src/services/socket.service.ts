@@ -13,6 +13,7 @@ import { ClaudeCodeBrain } from './claude-brain.service';
 import { codeWorkerHub } from './codeworker.service';
 import { synthesizeCodeSummary } from './summarizer.service';
 import { CartesiaTTSService } from './tts.service';
+import { heartbeatService } from './notifications/heartbeat.service';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret';
 const MAX_SESSION_DURATION_MS = 7_200_000; // 2 hours
@@ -47,6 +48,11 @@ export function setupSocketHandlers(io: Server) {
 
   io.on('connection', (socket: AuthenticatedSocket) => {
     console.log(`Client connected: ${socket.userId}`);
+    // Join user-scoped room so ResponseOrchestrator can broadcast to all of
+    // the user's active sockets (phone + tablet).
+    if (socket.userId) {
+      socket.join(`user:${socket.userId}`);
+    }
     let deepgram: DeepgramService | null = null;
     let realtime: RealtimeService | ClaudeCodeBrain | null = null;
     let transcriptBuffer: string[] = [];
@@ -443,6 +449,10 @@ export function setupSocketHandlers(io: Server) {
       angelProcessing = false;
       if (angelThinkingTimer) { clearTimeout(angelThinkingTimer); angelThinkingTimer = null; }
       liveDirectives = [];
+      // Stop heartbeat — session is over, no more proactive pulses
+      if (socket.userId) {
+        heartbeatService.stop(socket.userId, currentSessionId);
+      }
 
       // Close services in parallel for faster cleanup
       const closePromises: Promise<void>[] = [];
@@ -664,6 +674,15 @@ export function setupSocketHandlers(io: Server) {
           console.error('[session] TTS connection failed:', err);
           tts = null;
         }
+      }
+
+      // Start heartbeat — proactive in-session loop (commitments, calendar, intents)
+      if (socket.userId) {
+        heartbeatService.start({
+          userId: socket.userId,
+          sessionId,
+          openaiKey,
+        });
       }
 
       // Load voiceprint for owner identification (if enrolled)

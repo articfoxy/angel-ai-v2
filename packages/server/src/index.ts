@@ -18,6 +18,8 @@ import { skillsRouter } from './routes/skills';
 import { voiceprintRouter } from './routes/voiceprint';
 import { voicesRouter } from './routes/voices';
 import { workersRouter } from './routes/workers';
+import { devicesRouter } from './routes/devices';
+import { responseOrchestrator } from './services/notifications/orchestrator.service';
 import { authenticateToken } from './middleware/auth';
 import { setupSocketHandlers } from './services/socket.service';
 import { codeWorkerHub } from './services/codeworker.service';
@@ -196,9 +198,12 @@ app.use('/api/memory', authenticateToken, memoryLimiter, memoryRouter);
 app.use('/api/skills', authenticateToken, skillsRouter);
 app.use('/api/voiceprint', authenticateToken, voiceprintRouter);
 app.use('/api/workers', authenticateToken, llmHeavyLimiter, workersRouter);
+app.use('/api/devices', authenticateToken, memoryLimiter, devicesRouter);
 
 // Socket.io
 setupSocketHandlers(io);
+// Orchestrator needs the io server to emit in-session whispers
+responseOrchestrator.bindSocketServer(io);
 
 // WebSocket upgrade for Claude Code workers (separate from socket.io)
 import jwt from 'jsonwebtoken';
