@@ -3,16 +3,26 @@
  *
  * Stores in WorkingState.key='intent_stack'. Every brain-prompt assembly reads
  * this. Heartbeat expires items on every tick.
+ *
+ * Broadcasts 'intents:update' to the user's socket room whenever the stack
+ * changes so the client can render active-intent chips in sync.
  */
+import { Server as SocketServer } from 'socket.io';
 import { prisma } from '../../index';
 import { WorkingStateService } from '../memory/working-state.service';
 import type { Intent } from './intent-parser.service';
 
 export class IntentStackService {
   private ws: WorkingStateService;
+  private io: SocketServer | null = null;
 
   constructor() {
     this.ws = new WorkingStateService();
+  }
+
+  /** Attach socket.io so we can broadcast intent updates to the user's room. */
+  bindSocketServer(io: SocketServer): void {
+    this.io = io;
   }
 
   async push(userId: string, sessionId: string | null, intent: Intent): Promise<void> {
@@ -27,6 +37,7 @@ export class IntentStackService {
     // Cap at 8 — too many active intents = noisy prompt
     const capped = filtered.slice(-8);
     await this.ws.set(userId, sessionId, 'intent_stack' as any, capped, 24 * 3600 * 1000);
+    await this.broadcast(userId, sessionId);
   }
 
   async list(userId: string, sessionId: string | null): Promise<Intent[]> {
@@ -66,6 +77,7 @@ export class IntentStackService {
     });
     if (expired.length > 0) {
       await this.ws.set(userId, sessionId, 'intent_stack' as any, live, 24 * 3600 * 1000);
+      await this.broadcast(userId, sessionId);
     }
     return expired;
   }
@@ -75,6 +87,13 @@ export class IntentStackService {
     const all = await this.list(userId, sessionId);
     const filtered = all.filter((i) => i.id !== intentId);
     await this.ws.set(userId, sessionId, 'intent_stack' as any, filtered, 24 * 3600 * 1000);
+    await this.broadcast(userId, sessionId);
+  }
+
+  /** Remove all intents for this session. */
+  async clear(userId: string, sessionId: string | null): Promise<void> {
+    await this.ws.set(userId, sessionId, 'intent_stack' as any, [], 24 * 3600 * 1000);
+    await this.broadcast(userId, sessionId);
   }
 
   /** Render active intents as a compact prompt fragment. */
@@ -89,6 +108,22 @@ export class IntentStackService {
       return '- ' + parts.join(' · ');
     });
     return `<active_intents>\n${lines.join('\n')}\n</active_intents>`;
+  }
+
+  /** Emit the current active list to the user's socket room. */
+  private async broadcast(userId: string, sessionId: string | null): Promise<void> {
+    if (!this.io) return;
+    try {
+      const intents = await this.active(userId, sessionId);
+      this.io.to(`user:${userId}`).emit('intents:update', { intents });
+    } catch (err: any) {
+      console.warn('[intent-stack] broadcast failed:', err?.message?.slice(0, 100));
+    }
+  }
+
+  /** Force a broadcast of the current list (useful after socket reconnect). */
+  async broadcastNow(userId: string, sessionId: string | null): Promise<void> {
+    return this.broadcast(userId, sessionId);
   }
 }
 

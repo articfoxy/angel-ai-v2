@@ -68,11 +68,35 @@ export class HeartbeatService {
     await Promise.allSettled([
       this.checkUpcomingEvents(ctx),
       this.checkDueCommitments(ctx),
+      this.expireIntents(ctx),
       this.expireWorkingState(ctx),
     ]);
 
     const elapsed = Date.now() - t0;
     if (elapsed > 500) console.log(`[heartbeat] tick ${ctx.userId.slice(0, 8)} (${elapsed}ms)`);
+  }
+
+  /** Expire time-bound intents (e.g. "translate for 30 min"). Broadcasts
+   * the updated list so the client can drop chips in real time. */
+  private async expireIntents(ctx: HeartbeatContext): Promise<void> {
+    try {
+      const { intentStack } = await import('../intents/intent-stack.service');
+      const expired = await intentStack.purgeExpired(ctx.userId, ctx.sessionId);
+      if (expired.length > 0) {
+        // Gentle whisper when an explicit-command intent times out
+        for (const i of expired) {
+          if (i.source === 'user_command') {
+            await responseOrchestrator.propose({
+              userId: ctx.userId,
+              kind: 'status',
+              importance: 3,
+              content: `✓ Intent expired: ${i.kind}`,
+              dedupKey: `intent-expire-${i.id}`,
+            }).catch(() => {});
+          }
+        }
+      }
+    } catch {}
   }
 
   /** T-minus calendar check: anything in next 15 min? */

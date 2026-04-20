@@ -278,6 +278,136 @@ memoryRouter.get('/audit', async (req: AuthRequest, res: Response) => {
   }
 });
 
+// ─── Commitments (Phase B) ──────────────────────────────────────────────────
+
+memoryRouter.get('/commitments', async (req: AuthRequest, res: Response) => {
+  try {
+    const status = (req.query.status as string) || undefined;
+    const rows = await prisma.commitment.findMany({
+      where: { userId: req.userId, ...(status ? { status } : {}) },
+      orderBy: [{ status: 'asc' }, { dueDate: 'asc' }, { createdAt: 'desc' }],
+      take: 100,
+    });
+    res.json({ success: true, data: rows });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch commitments', detail: err?.message?.slice(0, 200) });
+  }
+});
+
+memoryRouter.post('/commitments/:id/complete', async (req: AuthRequest, res: Response) => {
+  try {
+    const { commitmentService } = await import('../services/memory/commitment.service');
+    const ok = await commitmentService.complete(req.userId!, String(req.params.id));
+    if (!ok) return res.status(404).json({ error: 'Commitment not found' });
+    res.json({ success: true });
+  } catch {
+    res.status(500).json({ error: 'Failed to complete' });
+  }
+});
+
+memoryRouter.post('/commitments/:id/cancel', async (req: AuthRequest, res: Response) => {
+  try {
+    const { commitmentService } = await import('../services/memory/commitment.service');
+    const ok = await commitmentService.cancel(req.userId!, String(req.params.id));
+    if (!ok) return res.status(404).json({ error: 'Commitment not found' });
+    res.json({ success: true });
+  } catch {
+    res.status(500).json({ error: 'Failed to cancel' });
+  }
+});
+
+// ─── Goals (Phase E) ────────────────────────────────────────────────────────
+
+memoryRouter.get('/goals', async (req: AuthRequest, res: Response) => {
+  try {
+    const status = (req.query.status as string) || undefined;
+    const { goalService } = await import('../services/memory/goal.service');
+    const rows = await goalService.list(req.userId!, status);
+    res.json({ success: true, data: rows });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to fetch goals', detail: err?.message?.slice(0, 200) });
+  }
+});
+
+memoryRouter.post('/goals', async (req: AuthRequest, res: Response) => {
+  try {
+    const { goalService } = await import('../services/memory/goal.service');
+    const id = await goalService.create({
+      userId: req.userId!,
+      title: String(req.body?.title || '').slice(0, 300),
+      description: req.body?.description ? String(req.body.description).slice(0, 1000) : undefined,
+      targetDate: req.body?.targetDate ? new Date(req.body.targetDate) : undefined,
+      importance: req.body?.importance,
+    });
+    res.json({ success: true, data: { id } });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to create goal', detail: err?.message?.slice(0, 200) });
+  }
+});
+
+memoryRouter.patch('/goals/:id/status', async (req: AuthRequest, res: Response) => {
+  try {
+    const { goalService } = await import('../services/memory/goal.service');
+    const ok = await goalService.setStatus(req.userId!, String(req.params.id), req.body?.status);
+    if (!ok) return res.status(404).json({ error: 'Goal not found' });
+    res.json({ success: true });
+  } catch {
+    res.status(500).json({ error: 'Failed to update status' });
+  }
+});
+
+// ─── Intents (Phase D) ──────────────────────────────────────────────────────
+
+memoryRouter.get('/intents', async (req: AuthRequest, res: Response) => {
+  try {
+    const { intentStack } = await import('../services/intents/intent-stack.service');
+    const sessionId = (req.query.sessionId as string | undefined) || null;
+    const intents = await intentStack.active(req.userId!, sessionId);
+    res.json({ success: true, data: intents });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to fetch intents' });
+  }
+});
+
+memoryRouter.delete('/intents/:id', async (req: AuthRequest, res: Response) => {
+  try {
+    const { intentStack } = await import('../services/intents/intent-stack.service');
+    const sessionId = (req.query.sessionId as string | undefined) || null;
+    const id = String(req.params.id);
+    await intentStack.remove(req.userId!, sessionId, id);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to remove intent' });
+  }
+});
+
+memoryRouter.delete('/intents', async (req: AuthRequest, res: Response) => {
+  try {
+    const { intentStack } = await import('../services/intents/intent-stack.service');
+    const sessionId = (req.query.sessionId as string | undefined) || null;
+    await intentStack.clear(req.userId!, sessionId);
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'Failed to clear intents' });
+  }
+});
+
+// ─── Digests (Phase E) ──────────────────────────────────────────────────────
+
+memoryRouter.get('/digests', async (req: AuthRequest, res: Response) => {
+  try {
+    const kind = req.query.kind as string | undefined;
+    const rows = await prisma.digest.findMany({
+      where: { userId: req.userId, ...(kind ? { kind } : {}) },
+      orderBy: { createdAt: 'desc' },
+      take: 30,
+    });
+    res.json({ success: true, data: rows });
+  } catch {
+    res.status(500).json({ error: 'Failed to fetch digests' });
+  }
+});
+
 // ─── Privacy mode ───────────────────────────────────────────────────────────
 
 memoryRouter.post('/privacy', async (req: AuthRequest, res: Response) => {

@@ -20,6 +20,7 @@ import { voicesRouter } from './routes/voices';
 import { workersRouter } from './routes/workers';
 import { devicesRouter } from './routes/devices';
 import { responseOrchestrator } from './services/notifications/orchestrator.service';
+import { intentStack } from './services/intents/intent-stack.service';
 import { authenticateToken } from './middleware/auth';
 import { setupSocketHandlers } from './services/socket.service';
 import { codeWorkerHub } from './services/codeworker.service';
@@ -204,6 +205,8 @@ app.use('/api/devices', authenticateToken, memoryLimiter, devicesRouter);
 setupSocketHandlers(io);
 // Orchestrator needs the io server to emit in-session whispers
 responseOrchestrator.bindSocketServer(io);
+// Intent stack broadcasts active-intent updates to the user's socket room
+intentStack.bindSocketServer(io);
 
 // WebSocket upgrade for Claude Code workers (separate from socket.io)
 import jwt from 'jsonwebtoken';

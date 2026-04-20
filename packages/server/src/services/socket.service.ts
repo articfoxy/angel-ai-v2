@@ -52,6 +52,14 @@ export function setupSocketHandlers(io: Server) {
     // the user's active sockets (phone + tablet).
     if (socket.userId) {
       socket.join(`user:${socket.userId}`);
+      // Push a fresh intents snapshot so the client can render chips on
+      // reconnect / new-tab without waiting for the next heartbeat tick.
+      (async () => {
+        try {
+          const { intentStack } = await import('./intents/intent-stack.service');
+          await intentStack.broadcastNow(socket.userId!, null);
+        } catch {}
+      })();
     }
     let deepgram: DeepgramService | null = null;
     let realtime: RealtimeService | ClaudeCodeBrain | null = null;
@@ -102,7 +110,8 @@ export function setupSocketHandlers(io: Server) {
         // Get base instructions (everything before dynamic sections)
         base = realtime.instructions
           .split('\n\n## WHAT YOU REMEMBER')[0]
-          .split('\n\n## LIVE DIRECTIVES')[0];
+          .split('\n\n## LIVE DIRECTIVES')[0]
+          .split('\n\n## ACTIVE INTENTS')[0];
       }
       const mem = lastMemoryContext.trim()
         ? `\n\n## WHAT YOU REMEMBER ABOUT THE USER\n${lastMemoryContext.trim()}`
@@ -111,7 +120,25 @@ export function setupSocketHandlers(io: Server) {
         ? '\n\n## LIVE DIRECTIVES (from the user during this session)\n' +
           liveDirectives.map((d, i) => `${i + 1}. ${d}`).join('\n')
         : '';
+      // Apply the static (synchronous) parts immediately so callers don't
+      // have to await. Then fetch the intent stack async and apply a second
+      // update if any active intents exist. The brain handles sequential
+      // updateInstructions calls correctly (latest wins).
       realtime.updateInstructions(base + mem + dir);
+      if (socket.userId) {
+        const uidI = socket.userId;
+        const sidI = currentSessionId;
+        (async () => {
+          try {
+            const { intentStack } = await import('./intents/intent-stack.service');
+            const fragment = await intentStack.renderForPrompt(uidI, sidI);
+            if (fragment && realtime) {
+              const intents = `\n\n## ACTIVE INTENTS (how you should be behaving right now)\n${fragment}`;
+              realtime.updateInstructions(base + mem + dir + intents);
+            }
+          } catch {}
+        })();
+      }
     }
 
     // Subscribe to worker project-list changes — refresh brain's prompt when
@@ -452,6 +479,11 @@ export function setupSocketHandlers(io: Server) {
       // Stop heartbeat — session is over, no more proactive pulses
       if (socket.userId) {
         heartbeatService.stop(socket.userId, currentSessionId);
+        // Reset passive inference window so a fresh session starts clean
+        try {
+          const { passiveInference } = await import('./intents/passive-inference.service');
+          passiveInference.reset(socket.userId);
+        } catch {}
       }
 
       // Close services in parallel for faster cleanup
@@ -796,6 +828,33 @@ export function setupSocketHandlers(io: Server) {
                 } catch (err: any) {
                   console.warn('[intent-parser] transcript path failed:', err?.message?.slice(0, 100));
                 }
+              })();
+            }
+
+            // Phase D3: Passive inference — watch ALL final transcripts
+            // (not just Owner) for foreign-language runs, jargon density, etc.
+            // Pushes auto_inferred intents with lower priority so explicit
+            // commands always win. Fire-and-forget.
+            if (socket.userId) {
+              const uidP = socket.userId;
+              const sidP = currentSessionId;
+              (async () => {
+                try {
+                  const { passiveInference } = await import('./intents/passive-inference.service');
+                  const { intentStack } = await import('./intents/intent-stack.service');
+                  const before = (await intentStack.active(uidP, sidP)).length;
+                  await passiveInference.observe({
+                    userId: uidP,
+                    sessionId: sidP,
+                    text: data.text,
+                    speakerLabel: label,
+                  });
+                  const after = (await intentStack.active(uidP, sidP)).length;
+                  if (after > before) {
+                    // New inference added — refresh brain prompt
+                    try { rebuildInstructions(); } catch {}
+                  }
+                } catch {}
               })();
             }
 
@@ -1156,6 +1215,36 @@ export function setupSocketHandlers(io: Server) {
         const mapped = data.speed === 'ultra' ? 'fastest' : data.speed;
         if (valid.includes(mapped as any)) tts.setSpeed(mapped as any);
       }
+    });
+
+    // Phase D — client dismisses an active intent chip
+    socket.on('intents:dismiss', async (data: { id: string }) => {
+      if (!socket.userId || !data?.id) return;
+      try {
+        const { intentStack } = await import('./intents/intent-stack.service');
+        await intentStack.remove(socket.userId, currentSessionId, data.id);
+        // Rebuild instructions so the brain drops the dismissed intent fragment
+        try { rebuildInstructions(); } catch {}
+      } catch (err: any) {
+        console.warn('[intent:dismiss] failed:', err?.message?.slice(0, 100));
+      }
+    });
+
+    socket.on('intents:clear', async () => {
+      if (!socket.userId) return;
+      try {
+        const { intentStack } = await import('./intents/intent-stack.service');
+        await intentStack.clear(socket.userId, currentSessionId);
+        try { rebuildInstructions(); } catch {}
+      } catch {}
+    });
+
+    socket.on('intents:refresh', async () => {
+      if (!socket.userId) return;
+      try {
+        const { intentStack } = await import('./intents/intent-stack.service');
+        await intentStack.broadcastNow(socket.userId, currentSessionId);
+      } catch {}
     });
 
     // ── Test conversation mode ──
