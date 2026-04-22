@@ -524,6 +524,7 @@ export function setupSocketHandlers(io: Server) {
       pendingAudioBytes = 0;
       deepgramReady = false;
       audioFirstChunkLogged = false;
+      verboseChunkCount = 0;
     }
 
     socket.on('session:start', async (payload: {
@@ -1093,6 +1094,11 @@ export function setupSocketHandlers(io: Server) {
     let audioDropReason = '';
     let audioLastLogAt = 0;
     let audioFirstChunkLogged = false;
+    /** Verbose per-chunk logging for the first N chunks of each session so we
+     *  can see type, size, path for each one in Railway logs. After this
+     *  counter hits the cap we fall back to the throttled summary logger. */
+    const VERBOSE_CHUNK_LIMIT = 20;
+    let verboseChunkCount = 0;
     const logAudioStats = (force = false) => {
       const now = Date.now();
       if (!force && now - audioLastLogAt < 3000) return;
@@ -1114,6 +1120,13 @@ export function setupSocketHandlers(io: Server) {
       if (audioFirstChunkLogged) return;
       audioFirstChunkLogged = true;
       console.log(`[audio] ${socket.userId?.slice(0, 8)} FIRST chunk path=${path}`);
+    };
+    /** Verbose per-chunk log for the first N chunks of a session. Cheap — we
+     *  cap at VERBOSE_CHUNK_LIMIT so long sessions don't spam. */
+    const logVerboseChunk = (size: number, type: string, path: 'direct' | 'buffered' | 'dropped', note?: string) => {
+      if (verboseChunkCount >= VERBOSE_CHUNK_LIMIT) return;
+      verboseChunkCount++;
+      console.log(`[audio-raw] ${socket.userId?.slice(0, 8)} #${verboseChunkCount} type=${type} size=${size} path=${path}${note ? ' ' + note : ''}`);
     };
 
     // Pre-Deepgram audio buffer. session:start is async and takes 2-5s (memory
@@ -1142,12 +1155,21 @@ export function setupSocketHandlers(io: Server) {
     };
 
     socket.on('audio', (audioData: string | Buffer | ArrayBuffer) => {
+      // Identify the wire type once for the verbose logger, so we can see in
+      // Railway logs whether mobile is sending binary ArrayBuffer, a Buffer,
+      // or a legacy base64 string.
+      const wireType = Buffer.isBuffer(audioData) ? 'Buffer'
+        : audioData instanceof ArrayBuffer ? 'ArrayBuffer'
+        : typeof audioData === 'string' ? 'string'
+        : typeof audioData;
+
       // Drop only if there's no session at all. If a session is in progress
       // but Deepgram hasn't finished connecting, buffer instead of dropping.
       if (!currentSessionId) {
         audioFramesDropped++;
         audioDropReason = 'no-session';
         logFirstChunkIfNeeded('dropped');
+        logVerboseChunk(0, wireType, 'dropped', 'no-session');
         logAudioStats();
         return;
       }
@@ -1166,6 +1188,7 @@ export function setupSocketHandlers(io: Server) {
         } else {
           audioFramesDropped++;
           audioDropReason = 'bad-type';
+          logVerboseChunk(0, wireType, 'dropped', 'bad-type');
           logAudioStats();
           return;
         }
@@ -1174,6 +1197,7 @@ export function setupSocketHandlers(io: Server) {
         if (buffer.length === 0 || buffer.length > 262144) {
           audioFramesDropped++;
           audioDropReason = buffer.length === 0 ? 'empty' : 'too-large';
+          logVerboseChunk(buffer.length, wireType, 'dropped', audioDropReason);
           logAudioStats();
           return;
         }
@@ -1183,6 +1207,7 @@ export function setupSocketHandlers(io: Server) {
           deepgram.sendAudio(buffer);
           audioFramesReceived++;
           logFirstChunkIfNeeded('direct');
+          logVerboseChunk(buffer.length, wireType, 'direct');
           logAudioStats();
           return;
         }
@@ -1203,6 +1228,7 @@ export function setupSocketHandlers(io: Server) {
         pendingAudio.push(buffer);
         audioFramesBuffered++;
         logFirstChunkIfNeeded('buffered');
+        logVerboseChunk(buffer.length, wireType, 'buffered');
         logAudioStats();
       } catch (err) {
         audioFramesDropped++;

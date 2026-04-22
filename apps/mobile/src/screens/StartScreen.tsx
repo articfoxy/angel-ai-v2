@@ -28,7 +28,7 @@ import { TranscriptView } from '../components/TranscriptView';
 import { IntentChips, type ActiveIntent } from '../components/IntentChips';
 import { useAuth } from '../hooks/useAuth';
 import { connectSocket, disconnectSocket, getSocket, onSocketStateChange } from '../services/socket';
-import { requestMicPermission, startRecording, stopRecording, setGain, getGain, setMicSource, setOutputDevice } from '../services/audio';
+import { requestMicPermission, startRecording, stopRecording, setGain, getGain, setMicSource, setOutputDevice, getAudioDebugStats } from '../services/audio';
 import { api } from '../services/api'; // Used for session creation
 import { getTTSPlayer, disposeTTSPlayer } from '../services/ttsPlayer';
 import { colors, spacing, fontSize, radius, fontFamily } from '../theme';
@@ -121,6 +121,16 @@ export function StartScreen() {
   const [directiveFocused, setDirectiveFocused] = useState(false);
   const [ttsSpeed, setTtsSpeed] = useState<'normal' | 'fast' | 'fastest' | 'ultra'>('normal');
   const [activeIntents, setActiveIntents] = useState<ActiveIntent[]>([]);
+  // Lightweight debug overlay — visible only when in listening mode. Shows
+  // live frame counter, socket state, session state, and any last error. Lets
+  // the user see whether audio is actually being captured without Railway logs.
+  const [debugStats, setDebugStats] = useState<{
+    frames: number;
+    lastFrameAgoMs: number;
+    recording: boolean;
+    socketConnected: boolean;
+    lastError: string | null;
+  }>({ frames: 0, lastFrameAgoMs: -1, recording: false, socketConnected: false, lastError: null });
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const testRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isStartingRef = useRef(false); // Double-tap guard for session creation
@@ -322,8 +332,21 @@ export function StartScreen() {
     });
 
     // ── TTS audio playback handlers ──
+    //
+    // Lazy init: the very first tts:start creates the AudioContext. This
+    // avoids spinning up react-native-audio-api's audio engine (which wants
+    // the iOS audio session) until we actually need to play something.
     sock.on('tts:start', (data: { whisperId: string }) => {
-      const player = getTTSPlayer();
+      const player = getTTSPlayer({
+        onPlaybackDone: (whisperId) => {
+          const currentSocket = getSocket();
+          currentSocket?.emit('tts:finished', { whisperId });
+        },
+      });
+      // .init() is idempotent — first call creates the AudioContext, later
+      // calls are no-ops. We don't await because startWhisper doesn't need
+      // the context to exist yet (it creates a queue source on demand).
+      player.init().catch((e) => console.warn('[TTS] init failed:', e?.message));
       player.startWhisper(data.whisperId);
     });
 
@@ -351,6 +374,24 @@ export function StartScreen() {
       setActiveIntents(Array.isArray(data?.intents) ? data.intents : []);
     });
   }, [cleanupSessionListeners, refetchSessions]);
+
+  // Pulse the debug overlay every 500ms while Listening. Cheap — just reads
+  // module-level counters. Stops when the user toggles Listen off.
+  useEffect(() => {
+    if (!isListening) return;
+    const id = setInterval(() => {
+      const stats = getAudioDebugStats();
+      const sock = getSocket();
+      setDebugStats({
+        frames: stats.frames,
+        lastFrameAgoMs: stats.lastFrameAgoMs,
+        recording: stats.recording,
+        socketConnected: !!sock?.connected,
+        lastError: stats.lastError,
+      });
+    }, 500);
+    return () => clearInterval(id);
+  }, [isListening]);
 
   // Subscribe to socket connection state changes
   useEffect(() => {
@@ -579,7 +620,11 @@ export function StartScreen() {
    * Auto-called on mount. Safe to call multiple times.
    */
   const startSession = async (opts: { startRecordingAfter?: boolean } = {}) => {
-    if (isActive || isStartingRef.current) return;
+    // Use refs, not state, to avoid stale-closure double-calls: toggleListening
+    // awaits `isStartingRef.current` to flip false but then reads `isActive`
+    // from React state — which may not have re-rendered yet. Stale state =
+    // duplicate session:start emit = duplicate Deepgram connections.
+    if (isActiveRef.current || isStartingRef.current) return;
     isStartingRef.current = true;
     try {
 
@@ -652,14 +697,16 @@ export function StartScreen() {
         startPayloadRef.current = startPayload;
         registerSessionListeners(socket);
 
-        // Initialize TTS player for voice whisper playback via AirPods
-        const ttsPlayer = getTTSPlayer({
-          onPlaybackDone: (whisperId) => {
-            const currentSocket = getSocket();
-            currentSocket?.emit('tts:finished', { whisperId });
-          },
-        });
-        await ttsPlayer.init();
+        // NOTE: TTS player is intentionally NOT initialized here. Creating
+        // react-native-audio-api's AudioContext eagerly causes iOS to set up
+        // a second AVAudioEngine that competes with audio-studio's mic tap
+        // for the shared AVAudioSession — and kills mic capture.
+        //
+        // Instead, TTS is lazy-initialized on the first tts:start event (see
+        // the tts:start listener in registerSessionListeners). By that time
+        // any Listen tap is already running happily with the mic tap owning
+        // the audio session, and AudioManager.disableSessionManagement() has
+        // neutralized RNA's session-reconfigure-on-activate behavior.
 
         socket.emit('session:start', startPayload);
 
@@ -765,7 +812,9 @@ export function StartScreen() {
         await new Promise((r) => setTimeout(r, 100));
       }
     }
-    if (!isActive) {
+    // Use the ref (not React state) to avoid stale closures — state may not
+    // have re-rendered yet after the poll loop above resolved.
+    if (!isActiveRef.current) {
       await startSession({ startRecordingAfter: false });
     }
 
@@ -830,6 +879,21 @@ export function StartScreen() {
         <View style={styles.reconnectBanner}>
           <ActivityIndicator size="small" color={colors.warning} />
           <Text style={styles.reconnectText}>Reconnecting...</Text>
+        </View>
+      )}
+
+      {/* Debug overlay — small monospace chip visible only while Listening.
+          Shows frame count, seconds since last frame, socket state, last error.
+          If "frames" stays at 0 for more than a second or two, we know the
+          native recorder started but PCM isn't reaching JS. */}
+      {isListening && (
+        <View style={styles.debugOverlay}>
+          <Text style={styles.debugText}>
+            {`mic: ${debugStats.recording ? 'on' : 'off'}  frames: ${debugStats.frames}  `}
+            {debugStats.lastFrameAgoMs < 0 ? 'no frames yet' : `last: ${(debugStats.lastFrameAgoMs / 1000).toFixed(1)}s ago`}
+            {`  ws: ${debugStats.socketConnected ? 'open' : 'closed'}`}
+            {debugStats.lastError ? `\nerror: ${debugStats.lastError}` : ''}
+          </Text>
         </View>
       )}
 
@@ -1120,6 +1184,27 @@ const styles = StyleSheet.create({
     color: colors.warning,
     fontSize: fontSize.sm,
     fontWeight: '600',
+  },
+  // Debug overlay — dense, tabular-numeric, low-contrast so it doesn't fight
+  // the actual UI but is always readable when the user glances at it.
+  debugOverlay: {
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.xs,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: radius.sm,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
+  debugText: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontVariant: ['tabular-nums'] as any,
+    // iOS has no System Mono font family; letting it fall back to system
+    // monospace keeps the counters aligned without bundling a font.
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    lineHeight: 14,
   },
   activeContainer: { flex: 1 },
   // Status banner — quieter, warmer accent bar instead of a framed box.

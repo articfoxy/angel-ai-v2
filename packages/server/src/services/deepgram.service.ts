@@ -281,8 +281,15 @@ export class DeepgramService {
       }
     });
 
-    this.connection.on(LiveTranscriptionEvents.Close, async () => {
-      console.warn(`[Deepgram] Connection closed for session ${this.config.sessionId}`);
+    this.connection.on(LiveTranscriptionEvents.Close, async (event: any) => {
+      // Deepgram's SDK forwards the raw WebSocket close event. code 1000 = normal,
+      // 1006 = abnormal (no close frame), 1011 = server error, 4xxx = app-level.
+      // Logging this helps distinguish "Deepgram closed us because of a bad
+      // option" from "network dropped the connection".
+      const code = event?.code ?? event?.target?.code ?? 'unknown';
+      const reason = event?.reason ?? event?.target?.reason ?? '';
+      const wasClean = event?.wasClean ?? event?.target?.wasClean;
+      console.warn(`[Deepgram] Connection closed for session ${this.config.sessionId} code=${code} reason="${reason}" clean=${wasClean}`);
       this.ready = false;
       if (this.sessionActive && !this.reconnecting) {
         this.config.onConnectionStatus?.('reconnecting');
