@@ -523,6 +523,7 @@ export function setupSocketHandlers(io: Server) {
       pendingAudio = [];
       pendingAudioBytes = 0;
       deepgramReady = false;
+      audioFirstChunkLogged = false;
     }
 
     socket.on('session:start', async (payload: {
@@ -1091,9 +1092,10 @@ export function setupSocketHandlers(io: Server) {
     let audioFramesDropped = 0;
     let audioDropReason = '';
     let audioLastLogAt = 0;
-    const logAudioStats = () => {
+    let audioFirstChunkLogged = false;
+    const logAudioStats = (force = false) => {
       const now = Date.now();
-      if (now - audioLastLogAt < 3000) return;
+      if (!force && now - audioLastLogAt < 3000) return;
       if (audioFramesReceived === 0 && audioFramesDropped === 0 && audioFramesBuffered === 0) return;
       audioLastLogAt = now;
       const parts: string[] = [];
@@ -1105,6 +1107,13 @@ export function setupSocketHandlers(io: Server) {
       audioFramesBuffered = 0;
       audioFramesDropped = 0;
       audioDropReason = '';
+    };
+    /** Log the very first chunk immediately so we can confirm audio is
+     *  reaching the server at all, without waiting for the 3s throttle. */
+    const logFirstChunkIfNeeded = (path: 'direct' | 'buffered' | 'dropped') => {
+      if (audioFirstChunkLogged) return;
+      audioFirstChunkLogged = true;
+      console.log(`[audio] ${socket.userId?.slice(0, 8)} FIRST chunk path=${path}`);
     };
 
     // Pre-Deepgram audio buffer. session:start is async and takes 2-5s (memory
@@ -1138,6 +1147,7 @@ export function setupSocketHandlers(io: Server) {
       if (!currentSessionId) {
         audioFramesDropped++;
         audioDropReason = 'no-session';
+        logFirstChunkIfNeeded('dropped');
         logAudioStats();
         return;
       }
@@ -1172,6 +1182,7 @@ export function setupSocketHandlers(io: Server) {
         if (deepgram && deepgramReady) {
           deepgram.sendAudio(buffer);
           audioFramesReceived++;
+          logFirstChunkIfNeeded('direct');
           logAudioStats();
           return;
         }
@@ -1191,6 +1202,7 @@ export function setupSocketHandlers(io: Server) {
         }
         pendingAudio.push(buffer);
         audioFramesBuffered++;
+        logFirstChunkIfNeeded('buffered');
         logAudioStats();
       } catch (err) {
         audioFramesDropped++;
