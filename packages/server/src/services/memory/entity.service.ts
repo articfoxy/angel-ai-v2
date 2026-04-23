@@ -119,7 +119,7 @@ export class EntityService {
    *  Returned rows include a numeric `distance` (0 = identical, larger = less
    *  similar). Callers typically filter on distance < 0.3 for "clearly the same". */
   async findSimilar(userId: string, query: string, k = 5): Promise<EntityRecord[]> {
-    const vec = await this.embeddings.embed(query);
+    const vec = await this.embeddings.embed(query, { userId, operation: 'entity_embed' });
     if (!vec) {
       const rows = await prisma.entity.findMany({
         where: { userId },

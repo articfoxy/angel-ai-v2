@@ -63,8 +63,9 @@ export class IntentParserService {
     return DIRECTIVE_HINT.test(lower);
   }
 
-  /** Extract structured intents from a user utterance. */
-  async parse(text: string): Promise<Intent[] | null> {
+  /** Extract structured intents from a user utterance.
+   *  @param opts.userId optional — pass for token-usage attribution. */
+  async parse(text: string, opts?: { userId?: string; sessionId?: string | null }): Promise<Intent[] | null> {
     if (!this.enabled) return null;
     if (!this.isDirectiveLikely(text)) return null;
 
@@ -83,6 +84,21 @@ export class IntentParserService {
       }, { signal: controller.signal });
 
       clearTimeout(timeout);
+      // Track token usage
+      if (opts?.userId) {
+        try {
+          const { usageService } = await import('../usage.service');
+          usageService.record({
+            userId: opts.userId,
+            provider: 'openai',
+            model: PARSER_MODEL,
+            operation: 'intent_parse',
+            inputTokens: res.usage?.prompt_tokens ?? 0,
+            outputTokens: res.usage?.completion_tokens ?? 0,
+            sessionId: opts.sessionId ?? null,
+          });
+        } catch {}
+      }
       const body = res.choices[0]?.message?.content || '{}';
       const parsed = JSON.parse(body);
       const intents: Intent[] = Array.isArray(parsed.intents) ? parsed.intents : [];

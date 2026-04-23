@@ -903,7 +903,7 @@ export function setupSocketHandlers(io: Server) {
                   const { intentParser } = await import('./intents/intent-parser.service');
                   const { intentStack } = await import('./intents/intent-stack.service');
                   if (!intentParser.isDirectiveLikely(data.text)) return;
-                  const intents = await intentParser.parse(data.text);
+                  const intents = await intentParser.parse(data.text, { userId: uidC, sessionId: sidC });
                   if (!intents || intents.length === 0) return;
                   for (const intent of intents) {
                     await intentStack.push(uidC, sidC, intent);

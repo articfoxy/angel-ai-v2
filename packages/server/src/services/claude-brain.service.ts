@@ -327,7 +327,22 @@ export class ClaudeCodeBrain {
         return null;
       }
 
-      return await response.json();
+      const data = (await response.json()) as any;
+      // Track token usage
+      if (this.userId && data?.usage) {
+        try {
+          const { usageService } = await import('./usage.service');
+          usageService.record({
+            userId: this.userId,
+            provider: 'anthropic',
+            model: CLAUDE_MODEL,
+            operation: 'claude_brain',
+            inputTokens: data.usage.input_tokens ?? 0,
+            outputTokens: data.usage.output_tokens ?? 0,
+          });
+        } catch {}
+      }
+      return data;
     } catch (err) {
       clearTimeout(timeoutId);
       throw err;

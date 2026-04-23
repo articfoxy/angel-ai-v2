@@ -115,6 +115,19 @@ Produce 2-3 short sentences (max 50 words) that cover the MOST useful context: t
       const text = data?.content?.find((b: any) => b.type === 'text')?.text?.trim() || '';
       if (!text) return null;
 
+      // Track token usage — Anthropic reports input/output separately
+      try {
+        const { usageService } = await import('../usage.service');
+        usageService.record({
+          userId: req.userId,
+          provider: 'anthropic',
+          model: BRIEF_MODEL,
+          operation: 'brief',
+          inputTokens: data?.usage?.input_tokens ?? 0,
+          outputTokens: data?.usage?.output_tokens ?? 0,
+        });
+      } catch {}
+
       const citations = [
         ...view.facts.map((f: any) => f.id),
         ...view.episodes.map((e: any) => e.id),

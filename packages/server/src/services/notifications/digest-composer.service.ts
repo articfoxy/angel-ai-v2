@@ -45,6 +45,18 @@ export class DigestComposer {
         response_format: { type: 'json_object' },
         temperature: 0.5,
       });
+      // Track token usage
+      try {
+        const { usageService } = await import('../usage.service');
+        usageService.record({
+          userId,
+          provider: 'openai',
+          model: DIGEST_MODEL,
+          operation: (kind === 'morning' ? 'digest_morning' : kind === 'evening' ? 'digest_evening' : 'digest_weekly'),
+          inputTokens: res.usage?.prompt_tokens ?? 0,
+          outputTokens: res.usage?.completion_tokens ?? 0,
+        });
+      } catch {}
       const body = JSON.parse(res.choices[0]?.message?.content || '{}');
       summary = String(body.summary || '').slice(0, 500);
       sections = Array.isArray(body.sections) ? body.sections.slice(0, 6) : [];

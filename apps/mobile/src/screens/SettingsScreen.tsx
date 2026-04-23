@@ -77,6 +77,17 @@ export function SettingsScreen() {
   const [ownerLanguage, setOwnerLanguage] = useState('English');
   const [voices, setVoices] = useState<VoiceOption[]>([]);
   const [selectedVoice, setSelectedVoice] = useState<string>('');
+  // Token usage tracker
+  const [usagePeriod, setUsagePeriod] = useState<'today' | 'week' | 'month' | 'all'>('today');
+  const [usage, setUsage] = useState<{
+    totalCalls: number;
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalCostUsd: number;
+    byProvider: Record<string, { inputTokens: number; outputTokens: number; costUsd: number; calls: number }>;
+    byOperation: Record<string, { inputTokens: number; outputTokens: number; costUsd: number; calls: number }>;
+  } | null>(null);
+  const [usageLoading, setUsageLoading] = useState(false);
   const [voicesLoading, setVoicesLoading] = useState(false);
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
   const previewCtxRef = useRef<AudioContext | null>(null);
@@ -143,7 +154,32 @@ export function SettingsScreen() {
     loadAudioDevices();
     loadSelectedVoice();
     loadWorkers();
+    loadUsage('today');
   }, [loadVoiceprintStatus, loadVoices, loadAudioDevices, loadSelectedVoice, loadWorkers]);
+
+  const loadUsage = React.useCallback(async (period: 'today' | 'week' | 'month' | 'all') => {
+    setUsageLoading(true);
+    try {
+      const data = await api.get<any>(`usage?period=${period}`);
+      setUsage({
+        totalCalls: data.totalCalls ?? 0,
+        totalInputTokens: data.totalInputTokens ?? 0,
+        totalOutputTokens: data.totalOutputTokens ?? 0,
+        totalCostUsd: data.totalCostUsd ?? 0,
+        byProvider: data.byProvider ?? {},
+        byOperation: data.byOperation ?? {},
+      });
+    } catch {
+      setUsage(null);
+    } finally {
+      setUsageLoading(false);
+    }
+  }, []);
+
+  const switchUsagePeriod = React.useCallback((period: 'today' | 'week' | 'month' | 'all') => {
+    setUsagePeriod(period);
+    loadUsage(period);
+  }, [loadUsage]);
 
   React.useEffect(() => {
     return () => {
@@ -812,6 +848,98 @@ export function SettingsScreen() {
           </TouchableOpacity>
         </View>
 
+        {/* Usage */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Usage</Text>
+          <View style={styles.usagePeriodRow}>
+            {(['today', 'week', 'month', 'all'] as const).map((p) => (
+              <TouchableOpacity
+                key={p}
+                style={[styles.usagePeriodChip, usagePeriod === p && styles.usagePeriodChipActive]}
+                onPress={() => switchUsagePeriod(p)}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.usagePeriodText, usagePeriod === p && styles.usagePeriodTextActive]}>
+                  {p === 'today' ? 'Today' : p === 'week' ? '7d' : p === 'month' ? '30d' : 'All'}
+                </Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity
+              onPress={() => loadUsage(usagePeriod)}
+              style={styles.usageRefresh}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons name="refresh" size={14} color={colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.card}>
+            {usageLoading && !usage ? (
+              <Text style={styles.cardDesc}>Loading…</Text>
+            ) : !usage || usage.totalCalls === 0 ? (
+              <Text style={styles.cardDesc}>No LLM calls recorded in this window yet.</Text>
+            ) : (
+              <>
+                {/* Headline: total cost + token totals */}
+                <View style={styles.usageHeadline}>
+                  <View>
+                    <Text style={styles.usageCost}>${usage.totalCostUsd.toFixed(4)}</Text>
+                    <Text style={styles.usageCostLabel}>estimated cost</Text>
+                  </View>
+                  <View style={styles.usageTotalsBlock}>
+                    <Text style={styles.usageTotal}>
+                      {formatTokens(usage.totalInputTokens)}<Text style={styles.usageTotalLabel}> in</Text>
+                    </Text>
+                    <Text style={styles.usageTotal}>
+                      {formatTokens(usage.totalOutputTokens)}<Text style={styles.usageTotalLabel}> out</Text>
+                    </Text>
+                    <Text style={styles.usageCalls}>{usage.totalCalls} calls</Text>
+                  </View>
+                </View>
+
+                {/* By provider */}
+                {Object.keys(usage.byProvider).length > 0 && (
+                  <View style={styles.usageSection}>
+                    <Text style={styles.usageSubTitle}>By provider</Text>
+                    {Object.entries(usage.byProvider)
+                      .sort(([, a], [, b]) => b.costUsd - a.costUsd)
+                      .map(([name, v]) => (
+                        <View key={name} style={styles.usageRow}>
+                          <Text style={styles.usageRowLabel}>{name}</Text>
+                          <Text style={styles.usageRowValue}>
+                            {formatTokens(v.inputTokens + v.outputTokens)} · ${v.costUsd.toFixed(4)}
+                          </Text>
+                        </View>
+                      ))}
+                  </View>
+                )}
+
+                {/* By operation */}
+                {Object.keys(usage.byOperation).length > 0 && (
+                  <View style={styles.usageSection}>
+                    <Text style={styles.usageSubTitle}>By operation</Text>
+                    {Object.entries(usage.byOperation)
+                      .sort(([, a], [, b]) => b.costUsd - a.costUsd)
+                      .slice(0, 8)
+                      .map(([name, v]) => (
+                        <View key={name} style={styles.usageRow}>
+                          <Text style={styles.usageRowLabel}>{formatOperation(name)}</Text>
+                          <Text style={styles.usageRowValue}>
+                            {v.calls} · ${v.costUsd.toFixed(4)}
+                          </Text>
+                        </View>
+                      ))}
+                  </View>
+                )}
+
+                <Text style={styles.usageFootnote}>
+                  Realtime voice, Deepgram, and Cartesia aren't tracked here yet — duration-billed.
+                </Text>
+              </>
+            )}
+          </View>
+        </View>
+
         {/* Account */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account</Text>
@@ -869,6 +997,39 @@ export function SettingsScreen() {
       </ScrollView>
     </View>
   );
+}
+
+/** Pretty-print token counts: 12345 → "12.3k", 1234567 → "1.2M". */
+function formatTokens(n: number): string {
+  if (!n) return '0';
+  if (n < 1_000) return String(n);
+  if (n < 1_000_000) return `${(n / 1_000).toFixed(1)}k`;
+  return `${(n / 1_000_000).toFixed(2)}M`;
+}
+
+/** Turn snake_case op names into human-readable labels. */
+function formatOperation(op: string): string {
+  const map: Record<string, string> = {
+    judge: 'Judge',
+    brief: 'Pre-brief',
+    digest_morning: 'Morning digest',
+    digest_evening: 'Evening digest',
+    digest_weekly: 'Weekly digest',
+    intent_parse: 'Intent parser',
+    retrieval_embed: 'Retrieval embed',
+    entity_embed: 'Entity embed',
+    realtime_session: 'Realtime voice',
+    claude_brain: 'Claude (code)',
+    summarize: 'Summarize',
+    extract: 'Extract',
+    mood_infer: 'Mood',
+    pattern_mine: 'Patterns',
+    search: 'Web search',
+    tts: 'TTS',
+    stt: 'STT',
+    other: 'Other',
+  };
+  return map[op] || op;
 }
 
 const styles = StyleSheet.create({
@@ -1118,5 +1279,108 @@ const styles = StyleSheet.create({
     fontSize: fontSize.sm,
     textAlign: 'center',
     paddingVertical: spacing.md,
+  },
+  // ─── Usage tracker ─────────────────────────────────────────────────────────
+  usagePeriodRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginBottom: spacing.sm,
+  },
+  usagePeriodChip: {
+    paddingHorizontal: spacing.sm + 2,
+    paddingVertical: 5,
+    borderRadius: 999,
+  },
+  usagePeriodChipActive: {
+    backgroundColor: 'rgba(217, 119, 87, 0.15)',
+  },
+  usagePeriodText: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  usagePeriodTextActive: {
+    color: colors.primary,
+    fontWeight: '700',
+  },
+  usageRefresh: {
+    marginLeft: 'auto',
+    padding: 4,
+  },
+  usageHeadline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.borderSubtle,
+    marginBottom: spacing.sm,
+  },
+  usageCost: {
+    color: colors.text,
+    fontSize: 28,
+    fontWeight: '700',
+    letterSpacing: -0.5,
+    fontVariant: ['tabular-nums'],
+  },
+  usageCostLabel: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    marginTop: 2,
+  },
+  usageTotalsBlock: {
+    alignItems: 'flex-end',
+  },
+  usageTotal: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'],
+  },
+  usageTotalLabel: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  usageCalls: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    marginTop: 2,
+  },
+  usageSection: {
+    marginTop: spacing.sm + 2,
+  },
+  usageSubTitle: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    marginBottom: spacing.xs + 2,
+  },
+  usageRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+  },
+  usageRowLabel: {
+    color: colors.textSecondary,
+    fontSize: fontSize.sm,
+    fontWeight: '500',
+  },
+  usageRowValue: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'],
+  },
+  usageFootnote: {
+    color: colors.textTertiary,
+    fontSize: 11,
+    fontStyle: 'italic',
+    marginTop: spacing.md,
+    lineHeight: 15,
   },
 });

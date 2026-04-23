@@ -57,6 +57,7 @@ model User {
   deviceTokens   DeviceToken[]
   calendarEvents CalendarEvent[]
   digests        Digest[]
+  tokenUsage     TokenUsage[]
 }
 
 model Session {
@@ -581,4 +582,29 @@ model Digest {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, kind, windowEnd(sort: Desc)])
+}
+
+/// Per-call LLM/API token usage tally. One row per provider request
+/// so we can slice by operation, model, and time window for the usage
+/// tracker in Settings. Written fire-and-forget from each call site.
+model TokenUsage {
+  id              String   @id @default(uuid())
+  userId          String
+  provider        String   // "openai" | "anthropic" | "deepgram" | "cartesia" | "perplexity"
+  model           String   // e.g. "gpt-4o-mini", "claude-opus-4-20250514", "text-embedding-3-small"
+  operation       String   // "judge" | "brief" | "digest_morning" | "intent_parse" | "retrieval_embed" | "realtime_session" | "claude_brain" | "tts" | "stt" | "search" | "other"
+  inputTokens     Int      @default(0)
+  outputTokens   Int      @default(0)
+  /// Denormalized USD cost at write-time — pricing changes, so freeze it here
+  /// for accurate historical totals.
+  costUsd         Float    @default(0)
+  /// Optional context for debugging (model + op combos)
+  sessionId       String?
+  createdAt       DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, provider, createdAt(sort: Desc)])
+  @@index([createdAt])
 }

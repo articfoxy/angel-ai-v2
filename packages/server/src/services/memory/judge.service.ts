@@ -217,6 +217,8 @@ export class MemoryJudgeService {
         workingStateText,
         similarFacts,
         trigger,
+        userId,
+        sessionId: sessionId ?? null,
       });
     } catch (err) {
       console.error('[judge] LLM call failed:', (err as any)?.message);
@@ -436,6 +438,8 @@ export class MemoryJudgeService {
     workingStateText: string;
     similarFacts: FactRecord[];
     trigger: JudgeTriggerReason;
+    userId: string;
+    sessionId: string | null;
   }): Promise<JudgeOutput> {
     // Truncate observations so total content stays well under model context window.
     // gpt-4o-mini has 128k input tokens ≈ 512k chars. Keep observations under 60k
@@ -542,6 +546,19 @@ Now produce the JSON output.`;
       response_format: { type: 'json_object' },
       temperature: 0.2,
     });
+    // Track token usage for the Settings meter. Fire-and-forget.
+    try {
+      const { usageService } = await import('../usage.service');
+      usageService.record({
+        userId: ctx.userId,
+        provider: 'openai',
+        model: JUDGE_MODEL,
+        operation: 'judge',
+        inputTokens: res.usage?.prompt_tokens ?? 0,
+        outputTokens: res.usage?.completion_tokens ?? 0,
+        sessionId: ctx.sessionId,
+      });
+    } catch {}
     const text = res.choices[0]?.message?.content || '{}';
     try {
       return JSON.parse(text);
