@@ -393,6 +393,31 @@ export function StartScreen() {
     return () => clearInterval(id);
   }, [isListening]);
 
+  // Push diagnostic state to the server every 3s while listening so we can
+  // diagnose the listening pipeline without depending on Railway log tailing
+  // by the user. Server logs to console + holds a 50-entry ring per user
+  // (GET /api/diag/audio).
+  useEffect(() => {
+    if (!isListening) return;
+    const push = () => {
+      const stats = getAudioDebugStats();
+      const sock = getSocket();
+      api.post('diag/audio', {
+        frames: stats.frames,
+        lastFrameAgoMs: stats.lastFrameAgoMs,
+        recording: stats.recording,
+        socketConnected: !!sock?.connected,
+        socketId: sock?.id || null,
+        sessionId: sessionIdRef.current,
+        lastError: stats.lastError,
+        ts: Date.now(),
+      }).catch(() => {}); // fire-and-forget; never block listening
+    };
+    push(); // immediate first push so we see the very start of the session
+    const id = setInterval(push, 3000);
+    return () => clearInterval(id);
+  }, [isListening]);
+
   // Subscribe to socket connection state changes
   useEffect(() => {
     const unsubscribe = onSocketStateChange((connected) => {

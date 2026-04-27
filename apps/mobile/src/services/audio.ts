@@ -280,6 +280,23 @@ export async function startRecording(
   lastFrameAt = 0;
   lastError = null;
 
+  // ─── DEFENSIVE iOS AUDIO SESSION RESET ───
+  // Re-disable RNA session management every time we start a recording. The
+  // module-load call should be sufficient, but if something (a navigation, an
+  // OTA reload, a prior TTS playback) re-enabled it, we re-disable here so
+  // audio-studio's setCategory below isn't immediately stomped. Cheap idempotent
+  // call. Also re-state our desired playAndRecord options as a no-op signal.
+  try {
+    AudioManager.disableSessionManagement();
+    AudioManager.setAudioSessionOptions({
+      iosCategory: 'playAndRecord',
+      iosMode: 'default',
+      iosOptions: ['allowBluetoothHFP', 'allowBluetoothA2DP', 'defaultToSpeaker'],
+    });
+  } catch (err: any) {
+    lastError = `rna-disable: ${err?.message?.slice(0, 80) || 'unknown'}`;
+  }
+
   // 1. Subscribe to native "AudioData" events BEFORE starting recording.
   //    This ensures we don't miss the first chunk.
   audioSubscription = addAudioEventListener(async (event: AudioEventPayload) => {

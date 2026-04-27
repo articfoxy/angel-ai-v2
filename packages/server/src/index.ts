@@ -20,6 +20,7 @@ import { voicesRouter } from './routes/voices';
 import { workersRouter } from './routes/workers';
 import { devicesRouter } from './routes/devices';
 import { usageRouter } from './routes/usage';
+import { diagRouter } from './routes/diag';
 import { responseOrchestrator } from './services/notifications/orchestrator.service';
 import { intentStack } from './services/intents/intent-stack.service';
 import { authenticateToken } from './middleware/auth';
@@ -202,6 +203,7 @@ app.use('/api/voiceprint', authenticateToken, voiceprintRouter);
 app.use('/api/workers', authenticateToken, llmHeavyLimiter, workersRouter);
 app.use('/api/devices', authenticateToken, memoryLimiter, devicesRouter);
 app.use('/api/usage', authenticateToken, memoryLimiter, usageRouter);
+app.use('/api/diag', authenticateToken, diagRouter);
 
 // Socket.io
 setupSocketHandlers(io);
