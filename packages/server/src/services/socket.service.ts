@@ -70,6 +70,7 @@ export function setupSocketHandlers(io: Server) {
     let currentSessionId: string | null = null;
     let tts: CartesiaTTSService | null = null;
     let ttsPlaying = false; // Echo gate: true while TTS audio plays on client
+    let ttsLastEndedAt = 0; // ms timestamp of last TTS end — for post-TTS dead zone
     let ttsEchoTimer: ReturnType<typeof setTimeout> | null = null; // Safety timeout for echo gate
     let testTimer: ReturnType<typeof setTimeout> | null = null;
     let liveDirectives: string[] = [];
@@ -508,6 +509,7 @@ export function setupSocketHandlers(io: Server) {
       if (tts) {
         const t = tts;
         tts = null;
+        if (ttsPlaying) ttsLastEndedAt = Date.now();
         ttsPlaying = false;
         if (ttsEchoTimer) { clearTimeout(ttsEchoTimer); ttsEchoTimer = null; }
         closePromises.push(t.close().catch((err: any) => console.error('[cleanup] TTS close error:', err)));
@@ -689,15 +691,18 @@ export function setupSocketHandlers(io: Server) {
           },
           onStart: (data) => {
             ttsPlaying = true;
-            // Safety timeout: release echo gate after 15s even if client never confirms
+            // Safety timeout: release echo gate after 30s even if client never confirms.
+            // Bumped from 15s — long whispers were getting prematurely cut, allowing
+            // Angel's still-playing voice to feed back into Deepgram.
             if (ttsEchoTimer) clearTimeout(ttsEchoTimer);
             ttsEchoTimer = setTimeout(() => {
               if (ttsPlaying) {
-                console.warn('[TTS] Echo gate safety timeout — releasing after 15s');
+                console.warn('[TTS] Echo gate safety timeout — releasing after 30s');
+                ttsLastEndedAt = Date.now();
                 ttsPlaying = false;
               }
               ttsEchoTimer = null;
-            }, 15_000);
+            }, 30_000);
             socket.emit('tts:start', data);
           },
           onDone: (data) => {
@@ -705,11 +710,12 @@ export function setupSocketHandlers(io: Server) {
             // ttsPlaying stays true until client confirms playback finished via
             // tts:finished. This prevents new transcripts from feeding to the AI
             // while audio is still playing, avoiding premature whisper interruption.
-            // The 15s safety timeout (set in onStart) handles the case where
+            // The 30s safety timeout (set in onStart) handles the case where
             // tts:finished never arrives.
           },
           onError: (error) => {
             console.error('[TTS] Error:', error);
+            if (ttsPlaying) ttsLastEndedAt = Date.now();
             ttsPlaying = false;
             if (ttsEchoTimer) { clearTimeout(ttsEchoTimer); ttsEchoTimer = null; }
           },
@@ -1174,6 +1180,20 @@ export function setupSocketHandlers(io: Server) {
         return;
       }
 
+      // ECHO GATE — drop audio frames while Angel's own TTS is playing back
+      // through the speaker, plus a 400ms tail to swallow lingering reverb.
+      // Without this, Deepgram transcribes Angel's own voice → those words
+      // feed back into the brain → Angel "responds to itself" in a loop.
+      // We accept losing some user audio during these windows; the
+      // alternative is constant echo loops which are far worse UX.
+      if (ttsPlaying || (ttsLastEndedAt > 0 && Date.now() - ttsLastEndedAt < 400)) {
+        audioFramesDropped++;
+        audioDropReason = ttsPlaying ? 'tts-playing' : 'tts-tail';
+        logVerboseChunk(0, wireType, 'dropped', audioDropReason);
+        logAudioStats();
+        return;
+      }
+
       try {
         let buffer: Buffer;
 
@@ -1265,6 +1285,7 @@ export function setupSocketHandlers(io: Server) {
       // 3. Cancel TTS if playing
       if (tts) { try { tts.cancel(); } catch {} }
       if (ttsPlaying) {
+        ttsLastEndedAt = Date.now();
         ttsPlaying = false;
         if (ttsEchoTimer) { clearTimeout(ttsEchoTimer); ttsEchoTimer = null; }
         socket.emit('tts:cancel', {});
@@ -1441,12 +1462,14 @@ export function setupSocketHandlers(io: Server) {
     // TTS client control events
     socket.on('tts:skip', () => {
       if (tts) tts.cancel();
+      if (ttsPlaying) ttsLastEndedAt = Date.now();
       ttsPlaying = false;
       if (ttsEchoTimer) { clearTimeout(ttsEchoTimer); ttsEchoTimer = null; }
       socket.emit('tts:cancel', {});
     });
 
     socket.on('tts:finished', () => {
+      if (ttsPlaying) ttsLastEndedAt = Date.now();
       ttsPlaying = false;
       if (ttsEchoTimer) { clearTimeout(ttsEchoTimer); ttsEchoTimer = null; }
     });
